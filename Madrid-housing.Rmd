@@ -170,7 +170,7 @@ leaflet() %>%
   addCircles(data = testing,
              lng = ~long, 
              lat = ~lat,
-             color = "white")
+             color = "lightblue")
 
 #grey circles mean we might have in that district both testing and training, as the localizations correspond to each district and not each porperty
 ```
