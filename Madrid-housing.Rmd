@@ -19,6 +19,7 @@ library(MASS)
 library(caret)
 library(stringi)
 library(dplyr)
+library(patchwork)
 library(ggplot2)
 ```
 
