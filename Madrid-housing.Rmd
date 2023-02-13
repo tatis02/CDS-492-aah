@@ -1,0 +1,469 @@
+---
+title: "Madrid housing"
+author: "Annunziata Alvarez-cascos"
+date: "Spring, 2023"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+```{r}
+rm(list=ls()) 
+library(leaflet)
+library(tidyverse)
+library(MASS)
+library(caret)
+library(stringi)
+library(dplyr)
+library(ggplot2)
+```
+
+Load the datasets
+
+```{r}
+data  = read.csv("houses_Madrid.csv")
+
+subtitle_data = read.csv("subtitles.csv", sep = ";", header = F)
+colnames(subtitle_data) = c("subtitle", "lat", "long")
+subtitle_data = subtitle_data[-c(1,2),]
+View(data)
+View(subtitle_data)
+```
+
+Cleaning the dataset
+
+```{r}
+#We delete the empty variables in the dataset and overfitting variables
+data$X = NULL
+data$latitude = NULL
+data$longitude = NULL
+data$portal = NULL
+data$door = NULL
+data$rent_price = NULL
+data$rent_price_by_area = NULL
+data$is_rent_price_known = NULL
+data$are_pets_allowed = NULL
+data$is_furnished = NULL
+data$is_kitchen_equipped = NULL
+data$has_private_parking = NULL
+data$has_public_parking = NULL
+data$operation = NULL
+data$raw_address = NULL
+data$sq_mt_useful = NULL
+data$is_exact_address_hidden = NULL
+data$is_buy_price_known = NULL
+data = subset(data, data$built_year <= 2022)
+
+
+#If a value in one of this variables is empty we assume is False or give it a name and translate variables if needed
+data$is_floor_under[data$is_floor_under == ""] = "False"
+data$is_new_development[data$is_new_development == ""] = "False"
+data$has_central_heating[data$has_central_heating == ""] = "False"
+data$has_individual_heating[data$has_individual_heating == ""] = "False"
+data$has_ac[data$has_ac == ""] = "False"
+data$has_fitted_wardrobes[data$has_fitted_wardrobes == ""] = "False"
+data$has_lift[data$has_lift == ""] = "False"
+data$is_exterior[data$is_exterior == ""] = "False"
+data$has_garden[data$has_garden == ""] = "False"
+data$has_pool[data$has_pool == ""] = "False"
+data$has_terrace[data$has_terrace == ""] = "False"
+data$has_balcony[data$has_balcony == ""] = "False"
+data$has_storage_room[data$has_storage_room == ""] = "False"
+data$is_accessible[data$is_accessible == ""] = "False"
+data$is_parking_included_in_price[data$is_parking_included_in_price == ""] = "False"
+data$has_green_zones[data$has_green_zones == ""] = "False"
+data$is_orientation_east[data$is_orientation_east == ""] = "False"
+data$is_orientation_west[data$is_orientation_west == ""] = "False"
+data$is_orientation_north[data$is_orientation_north == ""] = "False"
+data$is_orientation_south[data$is_orientation_south == ""] = "False"
+data$house_type_id[data$house_type_id == "HouseType 1: Pisos"] = "HouseType 1: Flat"
+data$house_type_id[data$house_type_id == "HouseType 2: Casa o chalet"] = "HouseType 2: Detached house"
+data$house_type_id[data$house_type_id == "HouseType 4: Dúplex"] = "HouseType 4: Duplex"
+data$house_type_id[data$house_type_id == "HouseType 5: Áticos"] = "HouseType 5: Attics"
+data$house_type_id[data$house_type_id == ""] = "HouseType 3: Studio"
+
+#We convert needed variables to factor
+data$subtitle = as.factor(data$subtitle)
+data$is_floor_under = as.factor(data$is_floor_under)
+data$house_type_id = as.factor(data$house_type_id)
+data$is_renewal_needed = as.factor(data$is_renewal_needed)
+data$is_new_development = as.factor(data$is_new_development)
+data$has_central_heating = as.factor(data$has_central_heating)
+data$has_individual_heating = as.factor(data$has_individual_heating)
+data$has_ac = as.factor(data$has_ac)
+data$has_fitted_wardrobes = as.factor(data$has_fitted_wardrobes)
+data$house_type_id = as.factor(data$house_type_id)
+data$has_ac = as.factor(data$has_ac)
+data$is_exterior = as.factor(data$is_exterior)
+data$has_garden = as.factor(data$has_garden)
+data$has_pool = as.factor(data$has_pool)
+data$has_terrace = as.factor(data$has_terrace)
+data$has_balcony = as.factor(data$has_balcony)
+data$has_storage_room = as.factor(data$has_storage_room)
+data$is_accessible = as.factor(data$is_accessible)
+data$has_green_zones = as.factor(data$has_green_zones)
+data$energy_certificate = as.factor(data$energy_certificate)
+data$has_parking = as.factor(data$has_parking)
+data$is_parking_included_in_price = as.factor(data$is_parking_included_in_price)
+data$is_orientation_north = as.factor(data$is_orientation_north)
+data$is_orientation_south = as.factor(data$is_orientation_south)
+data$is_orientation_east = as.factor(data$is_orientation_east)
+data$is_orientation_west = as.factor(data$is_orientation_west)
+
+#Recreate some variables
+data$subtitle = stri_sub(data$subtitle, 1 ,-9)
+
+north = data$is_orientation_north == "True"
+south = data$is_orientation_south == "True"
+east = data$is_orientation_east == "True"
+west = data$is_orientation_west == "True"
+data$orientation[north] = "north"
+data$orientation[south] = "south"
+data$orientation[east] = "east"
+data$orientation[west] = "west"
+
+#shuffle rows and merge both datasets
+data = merge(data, subtitle_data, by = "subtitle")
+n = nrow(data)
+shuffled_indices = sample(1:n)
+data = data[shuffled_indices, ]
+data$lat = as.numeric(sub(",", ".", data$lat, fixed = TRUE))
+data$long = as.numeric(sub(",", ".", data$long, fixed = TRUE))
+```
+
+```{r}
+#Summary of clean dataset
+names(data)
+dim(data)
+str(data)
+summary(data$subtitle)
+```
+
+Split into training and testing set for our future model
+
+```{r}
+idx=createDataPartition(data$buy_price, p = 0.75, list = FALSE)  
+
+training = data[idx,]
+testing = data[-idx,]
+nrow(training) #75%
+nrow(testing) 
+```
+
+##EXPLORATORY ANALYSIS
+
+Let's visualize on the map whether if the prices are well distributed in the training and testing sets.
+
+```{r}
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng=median(data$long), lat=median(data$lat), zoom = 11) %>%
+  addCircles(data = training,
+             lng = ~long, 
+             lat = ~lat,
+             color = "black")%>%
+  addCircles(data = testing,
+             lng = ~long, 
+             lat = ~lat,
+             color = "white")
+
+#grey circles mean we might have in that district both testing and training, as the localizations correspond to each district and not each porperty
+```
+
+```{r}
+training %>% ggplot(aes(x=buy_price)) + geom_density(fill="navyblue") + scale_x_log10()
+#Prices seem to be symmetric but with high variability.
+```
+
+Let explore a bit more into detail our variables and how they affect the price
+
+1.  Analysis of the distribution of the prices of the properties: exploring the average price tendency in the different districts in Madrid.
+
+```{r, warning=FALSE , message=FALSE}
+data_p = training %>% dplyr::select(subtitle, buy_price, lat, long) %>% group_by(subtitle,  lat, long) %>%summarise(mean_price = mean(buy_price))
+
+ggplot(data_p, aes(x = subtitle, y = mean_price)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Average price distribution",
+       x = "Districtw",
+       y = "Average price")
+
+#As in the plot we cannot properly see the districts but an oversll distribution, let's see which are the 
+most_expensive = data_p$subtitle[which.max(data_p$mean_price)]
+paste(most_expensive,data_p$mean_price[which.max(data_p$mean_price)],sep = " -> ") #Recoletos -> 2049893.62€ €
+cheapest = data_p$subtitle[which.min(data_p$mean_price)]
+paste(cheapest,data_p$mean_price[which.min(data_p$mean_price)],sep = " -> ") #San Cristóbal -> 99511.58€
+
+
+color_pal <- colorNumeric(palette = "RdYlBu", domain = data_p$mean_price, reverse=F)
+map = leaflet(data_p) %>% 
+  fitBounds(-3.8209,40.33711,-2.4932,43.0546)%>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng=median(data_p$long), lat=median(data_p$lat), zoom = 11) %>%
+  addCircles(lng = ~long, 
+             lat = ~lat,
+             radius = 10,
+             color = ~color_pal(mean_price),
+             fillColor = ~color_pal(mean_price),
+             fillOpacity = 1,
+             label = data_p$subtitle) 
+
+map %>% addLegend(position="bottomleft", pal = color_pal, values = ~mean_price, bins=5)
+
+#We can see how depending on the district the house is, the price can vary up to aproximately 1.950.382€
+```
+
+2.Analysis of the properties sizes tendency in the different districts in Madrid.
+
+```{r, warning=FALSE , message=FALSE}
+data_p = training %>% dplyr::select(subtitle, sq_mt_built, lat, long) %>% group_by(subtitle, lat, long) %>% summarise(mean_sq = mean(sq_mt_built))
+
+ggplot(data_p, aes(x = subtitle, y = mean_sq)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Distribution of size per district",
+       x = "Districts",
+       y = "Average size")
+
+paste(data_p$subtitle[which.max(data_p$mean_sq)] ,data_p$mean_sq[which.max(data_p$mean_sq)], sep = " -> ") #Aravaca -> 285.08
+paste(data_p$subtitle[which.min(data_p$mean_sq)], data_p$mean_sq[which.min(data_p$mean_sq)], sep = " -> ") #San Cristóbal -> 67.38
+
+color_pal <- colorNumeric(palette = "RdYlBu", domain = data_p$mean_sq, reverse=F)
+map = leaflet(data_p) %>% 
+  fitBounds(-3.8209,40.33711,-2.4932,43.0546)%>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng=median(data_p$long), lat=median(data_p$lat), zoom = 11) %>%
+addCircleMarkers(lng = ~long, 
+             lat = ~lat,
+             radius = as.integer(data_p$mean_sq)^(1/3),
+             fillOpacity = 0.3,
+             label = data_p$subtitle)
+
+map %>% addLegend(position="bottomleft", pal = color_pal, values = ~mean_sq, bins=5)
+
+
+
+```
+
+Is there any linear relation between the size and the price of the houses?
+
+```{r, warning=FALSE}
+
+ggplot(training, aes(x=sq_mt_built, y=buy_price)) + xlab("size") +ylab("price") + 
+  geom_point() + ggtitle("Price vs size of living area")
+#Linear relation but non-constant variability
+
+ggplot(training, aes(x = log(sq_mt_built), y = log(buy_price) )) + xlab("size") +ylab("price") + geom_point() + ggtitle("Price vs size of living area")
+#Better linear relation and more constant variability
+```
+
+3.  Analysis of the antiquity of the properties in relation to the price.
+
+```{r}
+ggplot(training, aes(x=built_year, y=buy_price)) + xlab("year built") + ylab("price") + 
+  geom_point() + ggtitle("Price vs antiquity of the house")
+
+#It doesn't have any linear relation nor constant variability
+```
+
+4.  Exploration of location of properties.
+
+```{r, message=FALSE}
+data_num = training %>% dplyr::select(subtitle, lat, long) %>% group_by(subtitle, lat, long) %>% summarise(count = length(subtitle))
+
+paste(data_num$subtitle[which.max(data_num$count)] , data_num$count[which.max(data_num$count)], sep = " -> ") #Moncloa -> 271
+paste(data_num$subtitle[which.min(data_num$count)] , data_num$count[which.min(data_num$count)], sep = " -> ") #Campo de las Naciones-Corralejos -> 1
+
+name = paste(data_num$subtitle, data_num$count, sep = " ")
+leaflet(data_num) %>% 
+  fitBounds(-3.8209,40.33711,-2.4932,43.0546)%>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng=median(data_num$long), lat=median(data_num$lat), zoom = 11) %>%
+  addMarkers(lng = ~long, 
+             lat = ~lat, 
+             label = ~name)%>%
+  addLabelOnlyMarkers(
+    lng = -3.7635, lat = 40.32718,
+    label = "Number of properties per district",
+    labelOptions = labelOptions(textsize = "20px",noHide = T, textOnly = T)) 
+ 
+
+```
+
+5.  Distribution of types of properties: in general, in the most expensive district and in the cheapest district.
+
+```{r}
+table = table(training$house_type_id)
+pie(table, labels = paste(names(table), "\n", table, sep=""), main="Pie Chart of Subtitle")
+
+idx1 = training$subtitle == most_expensive
+table = table(training$house_type_id[idx1])
+
+pie(table, labels = paste(names(table), "\n", table, sep=""), main= paste("Pie Chart of", most_expensive, sep = " "))
+
+idx2 = training$subtitle == cheapest
+table = table(training$house_type_id[idx2])
+pie(table, labels = paste(names(table), "\n", table, sep=""), main=paste("Pie Chart of" , cheapest, sep = " "))
+
+```
+
+6.  Analysis of the prices in relation with the factor variables
+
+```{r}
+wrap_plots(ggplot(data, aes(x = buy_price, color = has_lift, bins = 40)) +
+  geom_freqpoly(binwidth = 10000),
+ggplot(data, aes(x = buy_price, color = is_renewal_needed, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) ,
+ggplot(data, aes(x = buy_price, color = is_new_development, fill = is_new_development, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) , ncol = 1, nrow = 3)
+
+wrap_plots(ggplot(data, aes(x = buy_price, color = has_central_heating, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) ,
+ggplot(data, aes(x = buy_price, color = has_individual_heating, bins = 40)) +
+ geom_freqpoly(binwidth = 10000) ,
+ggplot(data, aes(x = buy_price, color = has_ac, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) ,ncol = 1, nrow = 3)
+
+wrap_plots(ggplot(data, aes(x = buy_price, color = has_fitted_wardrobes, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) ,
+ggplot(data, aes(x = buy_price, color = is_exterior, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) ,
+ggplot(data, aes(x = buy_price, color = has_garden, bins = 40)) +
+  geom_freqpoly(binwidth = 10000),ncol = 1, nrow = 3)
+
+wrap_plots(ggplot(data, aes(x = buy_price, color = has_pool, bins = 40)) +
+ geom_freqpoly(binwidth = 10000) ,
+ggplot(data, aes(x = buy_price, color = has_terrace, bins = 40)) +
+  geom_freqpoly(binwidth = 10000),
+ggplot(data, aes(x = buy_price, color = has_balcony, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) ,ncol = 1, nrow = 3)
+
+wrap_plots(ggplot(data, aes(x = buy_price, color = has_storage_room, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) ,
+ggplot(data, aes(x = buy_price, color = is_accessible, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) ,
+ggplot(data, aes(x = buy_price, color = has_green_zones, bins = 40)) +
+  geom_freqpoly(binwidth = 10000),ncol = 1, nrow = 3)
+
+wrap_plots(ggplot(data, aes(x = buy_price, color = energy_certificate, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) ,
+ggplot(data, aes(x = buy_price, color = has_parking, bins = 40)) +
+  geom_freqpoly(binwidth = 10000) ,
+ggplot(data, aes(x = buy_price, color = is_parking_included_in_price, bins = 40)) +
+  geom_freqpoly(binwidth = 10000), ncol = 1, nrow = 3)
+
+#As we can see, these plots don't suggest any of these variables could be used for an accurate prediction of our target variable: buy_price
+
+```
+
+Does orientation have to do with high prices?
+
+```{r}
+ori = subset(training, !is.na(training$orientation))
+ggplot(ori, aes(x = buy_price, col=orientation)) + geom_density() 
+
+#It doesn't seem so
+```
+
+Let's find high correlations between the predictors we analysed at the beginning to see if they could work.
+
+```{r}
+training$n_rooms = as.numeric(training$n_rooms)
+correlations <- cor(training[,c(4, 5, 6, 7, 8, 14, 15, 19, 42, 43 )])
+corr_price <- sort(correlations["buy_price",], decreasing = T)
+corr=data.frame(corr_price)
+ggplot(corr,aes(x = row.names(corr), y = corr_price)) + 
+  geom_bar(stat = "identity", fill = "brown") + 
+  scale_x_discrete(limits= row.names(corr)) +
+  labs(x = "Predictors", y = "Price", title = "Correlations") 
+  
+```
+
+As we have seen the most relevant predictors are the number of rooms and the price of the area.
+
+```{r}
+#lf1 <- lm(buy_price~ sq_mt_built, data = training)
+#summary(lf1)
+
+#lf2 <- lm(buy_price~ sq_mt_allotment, data = training)
+#summary(lf2)
+
+lf3 <- lm(buy_price~ n_rooms, data = training)
+summary(lf3)
+
+lf8 <- lm(buy_price~ buy_price_by_area, data = training)
+summary(lf8)
+
+#lf4 <- lm(buy_price~ n_bathrooms, data = training)
+#summary(lf4)
+
+#lf5 <- lm(buy_price~ n_floors, data = training)
+#summary(lf5)
+
+#lf6 <- lm(buy_price~ lat, data = training)
+#summary(lf6)
+
+#lf7 <- lm(buy_price~ long, data = training)
+#summary(lf7)
+
+```
+
+However, as with the number of rooms R2 is 38% and with the price per area is rougly 26% it means those variables in their own are not very significant.
+
+```{r}
+lf3 <- lm(log(buy_price)~ n_rooms, data = training)
+summary(lf3) #R2 = 41.38%
+
+lf8 <- lm(log(buy_price)~ buy_price_by_area, data = training)
+summary(lf8) #R2 = 38.45%
+
+lf8 <- lm(buy_price~ log(buy_price_by_area), data = training)
+summary(lf8) #r2 = 21.57% too low
+```
+
+```{r}
+linFit3 <- lm(log(buy_price)~ n_rooms, data = training)
+summary(linFit3) #R2 = 41.38%
+
+linFit8 <- lm(log(buy_price)~ log(buy_price_by_area), data = training)
+summary(linFit8) #R2 = 42.22%
+
+```
+
+As we have seen with applying a logaritmic regression in *buy_price* we would get a higher significancy for the number of rooms (aprox. 41%) and with the logarithm of the price by area (aprox. 42%) but would be still a little bit weak.
+
+As the significance of the predictors by their own doesn't give us a high proportion of variance, we are going to study how would multiple regression with different predictors work.
+
+```{r}
+#Firstly, we start by trying with the most relevant predictors seen in the barplot. 
+mr1 <- lm(log(buy_price) ~ n_rooms + log(buy_price_by_area) , data=training)
+summary(mr1) #R2 = 79.78%
+
+#Then we start adding different predictors in different ways to see how they respond
+mr2 <- lm(log(buy_price) ~ n_rooms + log(buy_price_by_area) + lat + long, data=training)
+summary(mr2) #R2 = 79.89%
+
+mr3 <- lm(log(buy_price) ~ n_rooms + log(sq_mt_built) + lat*long, data=training)
+summary(mr3) #R2 = 80.22%
+
+mr4 <- lm(log(buy_price) ~ n_rooms + n_bathrooms + log(sq_mt_built) + lat*long, data=training)
+summary(mr4) #R2 = 80.67%
+
+mr5 <- lm(log(buy_price) ~ n_rooms + n_bathrooms + n_floors + log(sq_mt_built) + lat*long, data=training)
+summary(mr5) #n_floors diminishes our R2 (R2 = 64.44%)
+
+mr6 <- lm(log(buy_price) ~ n_rooms + n_bathrooms + log(sq_mt_allotment) + lat*long, data=training)
+summary(mr6) #sq_mt_allotment gives us a very low R2 (R2 = 42.24%)
+
+
+mr7 <- lm(log(buy_price) ~ n_rooms + n_bathrooms + log(sq_mt_built) + log(buy_price_by_area) + lat*long, data=training)
+summary(mr7) #R2 = 1, which indicates a perfect fit for our model
+
+```
+
+After the exploratory analysis of our dataset and its variables, we are happy to say we have now have the predictors we will use to fit for our models.
