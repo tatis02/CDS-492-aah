@@ -3,8 +3,14 @@ title: "Madrid housing"
 author: "Annunziata Alvarez-cascos"
 date: "Spring, 2023"
 output:
-  pdf_document: default
+  html_document:
+    df_print: paged
   html_notebook: default
+  pdf_document: default
+always_allow_html: yes
+variant: gfm
+preserve_yaml: yes
+leafletmap: yes
 ---
 
 ```{r global_options, include=T, echo = F}
@@ -15,11 +21,11 @@ knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
 rm(list=ls()) 
 library(leaflet)
 library(tidyverse)
+library(patchwork)
 library(MASS)
 library(caret)
 library(stringi)
 library(dplyr)
-library(patchwork)
 library(ggplot2)
 ```
 
@@ -31,8 +37,8 @@ data  = read.csv("houses_Madrid.csv")
 subtitle_data = read.csv("subtitles.csv", sep = ";", header = F)
 colnames(subtitle_data) = c("subtitle", "lat", "long")
 subtitle_data = subtitle_data[-c(1,2),]
-View(data)
-View(subtitle_data)
+#View(data)
+#View(subtitle_data)
 ```
 
 Cleaning the dataset
@@ -92,7 +98,8 @@ data$subtitle = as.factor(data$subtitle)
 data$is_floor_under = as.factor(data$is_floor_under)
 data$house_type_id = as.factor(data$house_type_id)
 data$is_renewal_needed = as.factor(data$is_renewal_needed)
-data$is_new_development = as.factor(data$is_new_development)
+data$is_new_development = as.factor(data$is_new_development) #as it only has one factor we have to delete it 
+
 data$has_central_heating = as.factor(data$has_central_heating)
 data$has_individual_heating = as.factor(data$has_individual_heating)
 data$has_ac = as.factor(data$has_ac)
@@ -127,6 +134,11 @@ data$orientation[south] = "south"
 data$orientation[east] = "east"
 data$orientation[west] = "west"
 
+data$is_orientation_north = NULL
+data$is_orientation_south = NULL
+data$is_orientation_east = NULL
+data$is_orientation_west = NULL
+
 #shuffle rows and merge both datasets
 data = merge(data, subtitle_data, by = "subtitle")
 n = nrow(data)
@@ -139,9 +151,10 @@ data$long = as.numeric(sub(",", ".", data$long, fixed = TRUE))
 ```{r}
 #Summary of clean dataset
 names(data)
+
 dim(data)
 str(data)
-summary(data$subtitle)
+
 ```
 
 Split into training and testing set for our future model
@@ -154,6 +167,7 @@ testing = data[-idx,]
 nrow(training) #75%
 nrow(testing) 
 ```
+
 
 ##EXPLORATORY ANALYSIS
 
@@ -366,16 +380,17 @@ Does orientation have to do with high prices?
 
 ```{r}
 ori = subset(training, !is.na(training$orientation))
-ggplot(ori, aes(x = buy_price, col=orientation)) + geom_density() 
+ggplot(ori, aes(x = buy_price, col=orientation)) + geom_histogram(position = position_dodge()) 
 
 #It doesn't seem so
 ```
+
 
 Let's find high correlations between the predictors we analysed at the beginning to see if they could work.
 
 ```{r}
 training$n_rooms = as.numeric(training$n_rooms)
-correlations <- cor(training[,c(4, 5, 6, 7, 8, 14, 15, 19, 42, 43 )])
+correlations <- cor(training[,c(4, 5, 6, 7, 8, 14, 15, 19, 38, 39 )])
 corr_price <- sort(correlations["buy_price",], decreasing = T)
 corr=data.frame(corr_price)
 ggplot(corr,aes(x = row.names(corr), y = corr_price)) + 
@@ -468,3 +483,294 @@ summary(mr7) #R2 = 1, which indicates a perfect fit for our model
 ```
 
 After the exploratory analysis of our dataset and its variables, we are happy to say we have now have the predictors we will use to fit for our models.
+
+As the R2 was too accurate, I decided to perform a K-fold Cross-Validation to check whether the model was overfitting to the training data or not.
+
+```{r}
+#Create new dataset we the variables we are going to use selected before. 
+new_data = data%>% dplyr::select(n_rooms, n_bathrooms, sq_mt_built, buy_price_by_area, buy_price)
+new_data = na.omit(new_data)
+
+set.seed(123)
+idx=createDataPartition(new_data$buy_price, p = 0.75, list = FALSE)  
+
+train_data = new_data[idx,]
+test_data = new_data[-idx,]
+
+
+model <-  lm(log(buy_price) ~ n_rooms + n_bathrooms + log(sq_mt_built) + log(buy_price_by_area), data=new_data)
+summary(model)
+predicted <- predict(model, newdata = test_data)
+error <- sqrt(mean((test_data$buy_price - predicted)^2))
+
+# Check for overfitting
+train_predicted <- predict(model, newdata = train_data)
+train_error <- sqrt(mean((train_data$buy_price - train_predicted)^2))
+
+if (error > train_error) {
+  message("The model is overfitting to the training data.")
+} else {
+  message("The model is not overfitting to the training data.")
+}
+
+summary(model)$adj.r.squared
+
+library(car)
+vif(model) 
+```
+
+As we can see,the model is not overfitting to the training data but we have multicollinearity regarding the latitude and longitude as they should be treated as categorical variables. 
+
+```{r}
+data$lat = as.character(data$lat)
+data$long = as.character(data$long)
+```
+
+Now we are going to use some regression techniques to select the optimal model.
+
+##MODEL SELECTION
+```{r}
+colSums(is.na(data))
+data$is_new_development = NULL
+data$orientation = as.factor(data$orientation)
+data$neighborhood_id = as.factor(data$neighborhood_id)
+new_data  <- subset(data, select = -c(n_floors, sq_mt_allotment,parking_price,subtitle, id , title , street_name, street_number, lat, long ))
+new_data = na.omit(new_data)
+idx=createDataPartition(new_data$buy_price, p = 0.75, list = FALSE)  
+
+training = new_data[idx,]
+testing = new_data[-idx,]
+nrow(training) #75%
+nrow(testing) 
+
+
+training$neighborhood_id <- factor(training$neighborhood_id, levels = unique(training$neighborhood_id))
+testing$neighborhood_id <- factor(testing$neighborhood_id, levels = unique(training$neighborhood_id))
+
+training$floor <- factor(training$floor, levels = unique(training$floor))
+testing$floor <- factor(testing$floor, levels = unique(training$floor))
+```
+
+```{r}
+library(car)
+library(caret)
+modelo = lm(buy_price ~. , data = training)
+#vif(modelo) #there are aliased coefficients in the model
+
+#Lets choose the best model using stepwise regression so that we can get rid of multicollinearity
+mod_back = step(modelo, direction = "backward")
+summary(mod_back)
+final_mod_back = mod_back$finalModel
+vif(mod_back)
+mod_forw = step(modelo, direction = "forward")
+summary(mod_forw)
+final_mod_forw = mod_forw$finalModel
+#vif(mod_forw)
+mod_both = step(modelo, direction = "both")
+summary(mod_both)
+final_mod_both = mod_both$finalModel
+vif(mod_both)
+
+
+tab <- matrix(c(AIC(mod_back), AIC(mod_forw), AIC(mod_both), BIC(mod_back), BIC(mod_forw), BIC(mod_both)), ncol=3, byrow=TRUE)
+colnames(tab) <- c('backward','forward','hybrid')
+rownames(tab) <- c('AIC','BIC')
+as.table(tab)
+
+#calculate min value
+min_val = min(c(AIC(mod_back), AIC(mod_forw), AIC(mod_both), BIC(mod_forw), BIC(mod_back), BIC(mod_both)))
+min_val
+
+summary(mod_both)$adj.r.squared
+
+par(mfrow = c(2, 2))
+plot(mod_both)
+
+```
+
+THE LASSO
+```{r}
+library(glmnet)
+
+
+x <- model.matrix(buy_price ~ ., new_data)[,-7]
+y <- new_data$buy_price
+
+# Fit a Lasso model using glmnet
+lasso.fit <- cv.glmnet(x, y, alpha = 1)
+# Plot the cross-validation curve
+plot(lasso.fit)
+lasso.fit
+# Get the optimal value of lambda
+opt.lambda <- lasso.fit$lambda.min
+
+# Make predictions on the testing set
+idx=createDataPartition(new_data$buy_price, p = 0.75, list = FALSE)  
+
+training = new_data[idx,]
+testing = new_data[-idx,]
+
+# Set up CV object
+ctrl <- trainControl(method = "cv", number = 5, verboseIter = TRUE)
+
+# Train Lasso model using CV
+lasso.model <- train(buy_price ~ ., data = training, method = "glmnet", trControl = ctrl, tuneGrid = expand.grid(alpha = 1, lambda =opt.lambda ))
+
+# Make predictions on the testing set
+y.pred <- predict(lasso.model, newdata = testing)
+
+# Calculate the accuracy of the predictions
+accuracy <- cor(y.pred, testing$buy_price) ** 2
+accuracy
+
+best_model <- glmnet(x, y, alpha = 1, lambda = opt.lambda)
+#coef(best_model)
+
+plot(lasso.fit$glmnet.fit, 
+     "lambda", label=FALSE)
+```
+RIDGE REGRESSION
+```{r}
+x <- model.matrix(buy_price ~ ., new_data)[,-7]
+y <- new_data$buy_price
+
+# Fit a Lasso model using glmnet
+ridge.fit <- cv.glmnet(x, y, alpha = 0)
+# Plot the cross-validation curve
+plot(ridge.fit)
+ridge.fit
+# Get the optimal value of lambda
+opt.lambda <- ridge.fit$lambda.min
+
+
+# Set up CV object
+ctrl <- trainControl(method = "cv", number = 5, verboseIter = TRUE)
+
+# Train Ridge model using CV
+ridge.model <- train(buy_price ~ ., data = training, method = "glmnet", trControl = ctrl, tuneGrid = expand.grid(alpha = 0, lambda =opt.lambda ))
+
+# Make predictions on the testing set
+y.pred <- predict(ridge.model, newdata = testing)
+
+# Calculate the accuracy of the predictions
+accuracy <- cor(y.pred, testing$buy_price) ** 2
+accuracy
+
+best_model <- glmnet(x, y, alpha = 0, lambda = opt.lambda)
+#coef(best_model)
+
+plot(ridge.fit$glmnet.fit, 
+     "lambda", label=FALSE)
+```
+ELASTIC NET
+```{r}
+
+x <- model.matrix(buy_price ~ ., training)[,-7]
+y <- training$buy_price
+set.seed(123)
+model <- train(
+  buy_price ~., data = training, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+model$bestTune
+
+
+en.fit <- cv.glmnet(x, y, alpha = model$bestTune$alpha)
+# Plot the cross-validation curve
+plot(en.fit)
+en.fit
+
+plot(en.fit$glmnet.fit, 
+  "lambda", label=FALSE)
+# Get the optimal value of lambda
+opt.lambda <- en.fit$lambda.min
+
+
+
+# Set up CV object
+ctrl <- trainControl(method = "cv", number = 5, verboseIter = TRUE)
+
+# Train Ridge model using CV
+en.model=train(buy_price ~ ., data = training, method = "glmnet", trControl = ctrl, tuneGrid = expand.grid(alpha = model$bestTune$alpha, lambda =opt.lambda ))
+
+# Make predictions on the testing set
+y.pred <- predict(en.model, newdata = testing)
+
+# Calculate the accuracy of the predictions
+accuracy <- cor(y.pred, testing$buy_price) ** 2
+accuracy
+
+best_model <- glmnet(x, y, alpha = model$bestTune$alpha, lambda = opt.lambda)
+enet_coefs = coef(best_model)
+```
+
+
+nonzero_coefs <- coef(en.fit, s = "lambda.min")[-1,]
+
+x_array <- array(x, dim = c(nrow(x), ncol(x)))
+
+# Create a new data frame with the selected predictors
+
+nonzero_vars <- names(nonzero_coefs)[nonzero_coefs != 0]
+x_selected <- x[, nonzero_vars]
+
+new_data2 <- cbind(x_selected, y)
+
+# Convert the matrix to a data frame
+new_data2 <- as.data.frame(new_data2)
+
+# Fit a linear regression model using the selected predictors
+lm_model <- lm(y ~ ., data = new_data2)
+
+mod_both = step(lm_model, direction = "both")
+summary(mod_both)
+final_mod_both = mod_both$finalModel
+
+
+summary(mod_both)$adj.r.squared
+
+par(mfrow = c(2, 2))
+plot(mod_both)
+
+
+```{r}
+library(shiny)
+
+ui <- fluidPage(
+  sidebarLayout(
+    sidebarPanel(
+      numericInput("n_rooms", "number_of_rooms:", value = 3, min = 0, max = 10, step = 1)
+    ),
+    mainPanel(
+      plotOutput("plot")
+    )
+  )
+)
+
+# Define el servidor
+server <- function(input, output) {
+  # Crea una función reactiva que utilice el modelo
+  predicted_price <- reactive({
+    numrooms <- input$n_rooms
+    data.frame(n_rooms = numrooms) %>%
+      predict(mod_both)
+  })
+  
+  # Genera una salida para visualizar los resultados del modelo
+  output$plot <- renderPlot({
+    numrooms <- input$n_rooms
+    predicted <- predicted_price()
+    
+    ggplot(new_data, aes(x = n_rooms, y = buy_price)) +
+      geom_point() +
+      geom_smooth(method = "lm") +
+      geom_vline(xintercept = numrooms, linetype = "dashed", color = "red") +
+      geom_hline(yintercept = predicted, linetype = "dashed", color = "blue") +
+      labs(, x = "Number of rooms", y = "Price of house")
+  })
+}
+
+# Crea la aplicación Shiny
+shinyApp(ui, server)
+```
