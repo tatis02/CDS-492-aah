@@ -105,7 +105,7 @@ data$has_individual_heating = as.factor(data$has_individual_heating)
 data$has_ac = as.factor(data$has_ac)
 data$has_fitted_wardrobes = as.factor(data$has_fitted_wardrobes)
 data$house_type_id = as.factor(data$house_type_id)
-data$has_ac = as.factor(data$has_ac)
+data$has_lift = as.factor(data$has_lift)
 data$is_exterior = as.factor(data$is_exterior)
 data$has_garden = as.factor(data$has_garden)
 data$has_pool = as.factor(data$has_pool)
@@ -488,24 +488,19 @@ As the R2 was too accurate, I decided to perform a K-fold Cross-Validation to ch
 
 ```{r}
 #Create new dataset we the variables we are going to use selected before. 
-new_data = data%>% dplyr::select(n_rooms, n_bathrooms, sq_mt_built, buy_price_by_area, buy_price)
-new_data = na.omit(new_data)
+new_training = training%>% dplyr::select(n_rooms, n_bathrooms, sq_mt_built, buy_price_by_area, buy_price, lat, long)
+new_training = na.omit(new_training)
+new_testing = testing%>% dplyr::select(n_rooms, n_bathrooms, sq_mt_built, buy_price_by_area, buy_price, lat, long)
+new_testing = na.omit(new_testing)
 
-set.seed(123)
-idx=createDataPartition(new_data$buy_price, p = 0.75, list = FALSE)  
-
-train_data = new_data[idx,]
-test_data = new_data[-idx,]
-
-
-model <-  lm(log(buy_price) ~ n_rooms + n_bathrooms + log(sq_mt_built) + log(buy_price_by_area), data=new_data)
+model <-  lm(log(buy_price) ~ n_rooms + n_bathrooms + log(sq_mt_built) + log(buy_price_by_area), data=new_training)
 summary(model)
-predicted <- predict(model, newdata = test_data)
-error <- sqrt(mean((test_data$buy_price - predicted)^2))
+predicted <- predict(model, newdata = new_testing)
+error <- sqrt(mean((new_testing$buy_price - predicted)^2))
 
 # Check for overfitting
-train_predicted <- predict(model, newdata = train_data)
-train_error <- sqrt(mean((train_data$buy_price - train_predicted)^2))
+train_predicted <- predict(model, newdata = new_training)
+train_error <- sqrt(mean((new_training$buy_price - train_predicted)^2))
 
 if (error > train_error) {
   message("The model is overfitting to the training data.")
@@ -522,33 +517,37 @@ vif(model)
 As we can see,the model is not overfitting to the training data but we have multicollinearity regarding the latitude and longitude as they should be treated as categorical variables. 
 
 ```{r}
-data$lat = as.character(data$lat)
-data$long = as.character(data$long)
+new_training$lat = as.character(new_training$lat)
+new_training$long = as.character(new_training$long)
+new_testing$lat = as.character(new_testing$lat)
+new_testing$long = as.character(new_testing$long)
 ```
 
 Now we are going to use some regression techniques to select the optimal model.
 
 ##MODEL SELECTION
 ```{r}
-colSums(is.na(data))
-data$is_new_development = NULL
-data$orientation = as.factor(data$orientation)
-data$neighborhood_id = as.factor(data$neighborhood_id)
-new_data  <- subset(data, select = -c(n_floors, sq_mt_allotment,parking_price,subtitle, id , title , street_name, street_number, lat, long ))
-new_data = na.omit(new_data)
-idx=createDataPartition(new_data$buy_price, p = 0.75, list = FALSE)  
+colSums(is.na(training))
+colSums(is.na(testing))
+training$is_new_development = NULL
+training$orientation = as.factor(training$orientation)
+training$neighborhood_id = as.factor(training$neighborhood_id)
+testing$is_new_development = NULL
+testing$orientation = as.factor(testing$orientation)
+testing$neighborhood_id = as.factor(testing$neighborhood_id)
+training  = subset(training, select = -c(n_floors, sq_mt_allotment,parking_price, id , title , street_name, street_number, lat, long ))
+testing  = subset(testing, select = -c(n_floors, sq_mt_allotment,parking_price, id , title , street_name, street_number, lat, long ))
+training = na.omit(training)
+testing = na.omit(testing)
 
-training = new_data[idx,]
-testing = new_data[-idx,]
-nrow(training) #75%
-nrow(testing) 
-
-
-training$neighborhood_id <- factor(training$neighborhood_id, levels = unique(training$neighborhood_id))
-testing$neighborhood_id <- factor(testing$neighborhood_id, levels = unique(training$neighborhood_id))
+training$neighborhood_id = factor(training$neighborhood_id, levels = unique(training$neighborhood_id))
+testing$neighborhood_id = factor(testing$neighborhood_id, levels = unique(training$neighborhood_id))
 
 training$floor <- factor(training$floor, levels = unique(training$floor))
 testing$floor <- factor(testing$floor, levels = unique(training$floor))
+
+training$subtitle <- factor(training$subtitle, levels = unique(training$subtitle))
+testing$subtitle <- factor(testing$subtitle, levels = unique(training$subtitle))
 ```
 
 ```{r}
@@ -592,38 +591,27 @@ THE LASSO
 ```{r}
 library(glmnet)
 
+new_data = rbind(training, testing)
+x = model.matrix(buy_price ~ ., new_data)[,-7]
+y = new_data$buy_price
 
-x <- model.matrix(buy_price ~ ., new_data)[,-7]
-y <- new_data$buy_price
+lasso.fit = cv.glmnet(x, y, alpha = 1)
 
-# Fit a Lasso model using glmnet
-lasso.fit <- cv.glmnet(x, y, alpha = 1)
-# Plot the cross-validation curve
 plot(lasso.fit)
 lasso.fit
-# Get the optimal value of lambda
-opt.lambda <- lasso.fit$lambda.min
 
-# Make predictions on the testing set
-idx=createDataPartition(new_data$buy_price, p = 0.75, list = FALSE)  
+opt.lambda = lasso.fit$lambda.min
 
-training = new_data[idx,]
-testing = new_data[-idx,]
+ctrl = trainControl(method = "cv", number = 5, verboseIter = TRUE)
 
-# Set up CV object
-ctrl <- trainControl(method = "cv", number = 5, verboseIter = TRUE)
+lasso = train(buy_price ~ ., data = training, method = "glmnet", trControl = ctrl, tuneGrid = expand.grid(alpha = 1, lambda = opt.lambda ))
 
-# Train Lasso model using CV
-lasso.model <- train(buy_price ~ ., data = training, method = "glmnet", trControl = ctrl, tuneGrid = expand.grid(alpha = 1, lambda =opt.lambda ))
+y.pred = predict(lasso, newdata = testing)
 
-# Make predictions on the testing set
-y.pred <- predict(lasso.model, newdata = testing)
+accuracy = cor(y.pred, testing$buy_price) ** 2
+accuracy #91.23%
 
-# Calculate the accuracy of the predictions
-accuracy <- cor(y.pred, testing$buy_price) ** 2
-accuracy
-
-best_model <- glmnet(x, y, alpha = 1, lambda = opt.lambda)
+lasso_model = glmnet(x, y, alpha = 1, lambda = opt.lambda)
 #coef(best_model)
 
 plot(lasso.fit$glmnet.fit, 
@@ -631,32 +619,26 @@ plot(lasso.fit$glmnet.fit,
 ```
 RIDGE REGRESSION
 ```{r}
-x <- model.matrix(buy_price ~ ., new_data)[,-7]
-y <- new_data$buy_price
+x = model.matrix(buy_price ~., new_data)[,-7]
+y = new_data$buy_price
 
-# Fit a Lasso model using glmnet
-ridge.fit <- cv.glmnet(x, y, alpha = 0)
-# Plot the cross-validation curve
+ridge.fit = cv.glmnet(x, y, alpha = 0)
+
 plot(ridge.fit)
 ridge.fit
-# Get the optimal value of lambda
-opt.lambda <- ridge.fit$lambda.min
 
+opt.lambda = ridge.fit$lambda.min
 
-# Set up CV object
-ctrl <- trainControl(method = "cv", number = 5, verboseIter = TRUE)
+ctrl = trainControl(method = "cv", number = 5, verboseIter = TRUE)
 
-# Train Ridge model using CV
-ridge.model <- train(buy_price ~ ., data = training, method = "glmnet", trControl = ctrl, tuneGrid = expand.grid(alpha = 0, lambda =opt.lambda ))
+ridge = train(buy_price ~ ., data = training, method = "glmnet", trControl = ctrl, tuneGrid = expand.grid(alpha = 0, lambda =opt.lambda ))
 
-# Make predictions on the testing set
-y.pred <- predict(ridge.model, newdata = testing)
+y.pred = predict(ridge, newdata = testing)
 
-# Calculate the accuracy of the predictions
-accuracy <- cor(y.pred, testing$buy_price) ** 2
-accuracy
+accuracy = cor(y.pred, testing$buy_price) ** 2
+accuracy #89.24%
 
-best_model <- glmnet(x, y, alpha = 0, lambda = opt.lambda)
+ridge_model = glmnet(x, y, alpha = 0, lambda = opt.lambda)
 #coef(best_model)
 
 plot(ridge.fit$glmnet.fit, 
@@ -665,44 +647,37 @@ plot(ridge.fit$glmnet.fit,
 ELASTIC NET
 ```{r}
 
-x <- model.matrix(buy_price ~ ., training)[,-7]
-y <- training$buy_price
+x = model.matrix(buy_price ~ ., training)[,-7]
+y = training$buy_price
 set.seed(123)
-model <- train(
+model = train(
   buy_price ~., data = training, method = "glmnet",
   trControl = trainControl("cv", number = 10),
-  tuneLength = 10
-)
+  tuneLength = 10)
 model$bestTune
 
+en.fit = cv.glmnet(x, y, alpha = model$bestTune$alpha)
 
-en.fit <- cv.glmnet(x, y, alpha = model$bestTune$alpha)
-# Plot the cross-validation curve
 plot(en.fit)
 en.fit
 
 plot(en.fit$glmnet.fit, 
-  "lambda", label=FALSE)
-# Get the optimal value of lambda
-opt.lambda <- en.fit$lambda.min
+     "lambda", label=FALSE)
+
+opt.lambda = en.fit$lambda.min
 
 
+ctrl = trainControl(method = "cv", number = 5, verboseIter = TRUE)
 
-# Set up CV object
-ctrl <- trainControl(method = "cv", number = 5, verboseIter = TRUE)
+elasticnet = train(buy_price ~ ., data = training, method = "glmnet", trControl = ctrl, tuneGrid = expand.grid(alpha = model$bestTune$alpha, lambda =opt.lambda ))
 
-# Train Ridge model using CV
-en.model=train(buy_price ~ ., data = training, method = "glmnet", trControl = ctrl, tuneGrid = expand.grid(alpha = model$bestTune$alpha, lambda =opt.lambda ))
+y.pred = predict(elasticnet, newdata = testing)
 
-# Make predictions on the testing set
-y.pred <- predict(en.model, newdata = testing)
+accuracy = cor(y.pred, testing$buy_price) ** 2
+accuracy #92.42405%
 
-# Calculate the accuracy of the predictions
-accuracy <- cor(y.pred, testing$buy_price) ** 2
-accuracy
-
-best_model <- glmnet(x, y, alpha = model$bestTune$alpha, lambda = opt.lambda)
-enet_coefs = coef(best_model)
+elasticnet_model = glmnet(x, y, alpha = model$bestTune$alpha, lambda = opt.lambda)
+enet_coefs = coef(elasticnet_model)
 ```
 
 
@@ -735,42 +710,246 @@ plot(mod_both)
 
 
 ```{r}
-library(shiny)
+library(rpart)
+library(rpart.plot)
 
+#Regression tree
+
+set.seed(123)
+#param_grid <-expand.grid(cp = seq(0.01, 0.5, 0.01), maxdepth = seq(2, 10, 1), 
+                                        #minsplit = seq(10, 100, 10), minbucket = seq(2, 20, 1))
+
+#It doesn't work unless I get rid of the others hyperparams
+
+param_grid <-expand.grid(cp = seq(0.01, 0.5, 0.01))
+ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+
+
+reg_tree <- train(buy_price ~ ., data = training, method = "rpart",
+                  tuneGrid = param_grid, trControl = ctrl)
+
+
+reg_tree$bestTune
+rt_model <- rpart(buy_price ~ ., data = training, method = "anova",
+                     cp = reg_tree$bestTune$cp)
+pred <- predict(rt_model, newdata = testing)
+accuracy <- 1 - mean(abs(pred - testing$buy_price))/mean(testing$buy_price)
+accuracy #76.62%
+
+rpart.plot(rt_model)
+
+```
+
+```{r}
+
+#Random Forest
+library(randomForest)
+
+#param_grid <-expand.grid(mtry = c(2, 4, 6), ntree = seq(200, 700, 50))
+param_grid <-expand.grid(mtry = c(2, 4, 6))
+ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+
+training2 = training[,-6]
+testing2 = testing[,-6]
+rf <- train(buy_price ~ ., data = training2, method = "rf",
+                  tuneGrid = param_grid, trControl = ctrl)
+
+
+rf$bestTune
+#rf_model <- randomForest(buy_price ~ ., data = training, mtry = rf$bestTune$mtry, importance = TRUE)
+#Error in randomForest.default(m, y, ...) : 
+#Can not handle categorical predictors with more than 53 categories
+
+
+rf_model <- randomForest(buy_price ~ ., data = training2, mtry = rf$bestTune$mtry, importance = TRUE)
+
+pred <- predict(rf_model, newdata = testing2)
+accuracy <- 1 - mean(abs(pred - testing2$buy_price))/mean(testing2$buy_price) #there is a na in pred
+accuracy
+#89.92%
+varImpPlot(rf_model)
+```
+
+```{r}
+#SVM
+library(e1071)
+param_grid = expand.grid(degree = seq(1,10,1), scale = 1, C = seq(0.5, 3, 0.5) )
+
+ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+
+
+svm <- train(buy_price ~ ., data = training, method = "svmPoly",
+                  tuneGrid = param_grid, trControl = ctrl)
+
+svm$bestTune
+svm_model = svm(buy_price~., data = training, type = "C-classification", kernel = "polynomial",
+          degree = svm$bestTune$degree)
+
+pred <- predict(svm_model, newdata = testing)
+accuracy <- 1 - mean(abs(pred - testing$buy_price))/mean(testing$buy_price)
+accuracy
+```
+
+
+
+Lets build an application with Elastic net model.
+```{r}
+library(shiny)
 ui <- fluidPage(
+  titlePanel("House price prediction"),
   sidebarLayout(
     sidebarPanel(
-      numericInput("n_rooms", "number_of_rooms:", value = 3, min = 0, max = 10, step = 1)
-    ),
+      numericInput("sq_mt_built", "Introduce the square meters of the house you are looking for:", value = 0, min =15),
+      numericInput("n_rooms", "Introduce the number of rooms:", value = 0, min = 0),
+      numericInput("n_bathrooms", "Introduce the number of bathrooms:", value = 0, min = 0),
+      selectInput("subtitle", "Introduce the district you want to live in:", choices = sort(unique(data$subtitle))),
+      selectInput("neighborhood_id", "Introduce the neighborhood you want to live in:", choices = "Select a district first"),
+      selectInput("house_type_id", "What kind of house would you like to live in?:", choices = unique(data$house_type_id)),
+      conditionalPanel(
+      condition = "input.house_type_id != 'HouseType 2: Detached house'",
+      selectInput("floor", "Select floor number:", choices = c("Not important", sort(unique(data$floor))))),
+      
+      selectInput("is_floor_under", "Is floor under?:", choices=c("Not important", "True", "False")),
+      selectInput("is_renewal_needed", "Is renewal needed?:", choices=c("Not important", "True", "False")),
+      selectInput("built_year", "Year the house was built in:", choices=c("Not important", sort(unique(data$built_year)))),
+      selectInput("has_central_heating", "Has central heating?:", choices=c("Not important", "True", "False")),
+      selectInput("has_individual_heating", "Has individual heating?:", choices=c("Not important", "True", "False")),
+      selectInput("has_ac", "Do you want to have AC?:", choices=c("Not important", "True", "False")),
+      selectInput("has_fitted_wardrobes", "Do you want to have fitted wardrobes?:", choices=c("Not important", "True", "False")),
+      selectInput("has_lift", "Do you want to have a lift?:", choices=c("Not important", "True", "False")),
+      selectInput("is_exterior", "Do you want it to be exterior?:", choices=c("Not important", "True", "False")),
+      selectInput("has_garden", "Do you want to have a garden?:", choices=c("Not important", "True", "False")),
+      selectInput("has_pool", "Do you want to have a pool?:", choices=c("Not important", "True", "False")),
+      selectInput("has_terrace", "Do you want to have a terrace?:", choices=c("Not important", "True", "False")),
+      selectInput("has_balcony", "Do you want to have a balcony?:", choices=c("Not important", "True", "False")),
+      selectInput("has_storage_room", "Do you want to have a storage room?:", choices=c("Not important", "True", "False")),
+      selectInput("is_accessible", "Do you want it to be accessible?:", choices=c("Not important", "True", "False")),
+      selectInput("has_green_zones", "Do you want to have a green zones?:", choices=c("Not important", "True", "False")),
+      selectInput("energy_certificate", "What energy certificate would you like it to have?:", choices=c("Not important", sort(unique(data$energy_certificate)))),
+      selectInput("orientation", "Any preference in orientation:", choices=c("Not important", "east", "west", "south", "north")),
+      
+      selectInput("has_parking", "Do you want to have parking?:", choices=c("Not important", "True", "False")),
+      conditionalPanel(
+      condition = "input.has_parking == 'True'",
+      selectInput("is_parking_included_in_price", "Parking included in price:", choices = c("Not important", "True", "False"))),
+      
+      ),
     mainPanel(
-      plotOutput("plot")
+      plotOutput("predicted price")
     )
   )
 )
 
-# Define el servidor
-server <- function(input, output) {
-  # Crea una función reactiva que utilice el modelo
-  predicted_price <- reactive({
-    numrooms <- input$n_rooms
-    data.frame(n_rooms = numrooms) %>%
-      predict(mod_both)
+
+server=function(input, output, session) {
+  
+  get_neighborhoods=function(subtitle) {
+    unique(data$neighborhood_id[data$subtitle == subtitle])
+  }
+ 
+  observe({
+    subtitle = input$subtitle
+    if (is.null(subtitle) || subtitle == "Select a district") {
+      
+      updateSelectInput(session, "neighborhood_id", choices = c("Select a district first"))
+    } else {
+      
+      neighborhood_id = get_neighborhoods(subtitle)
+      updateSelectInput(session, "neighborhood_id", choices = c("Select a neighborhood", neighborhood_id))
+    }
+  })
+ 
+  predicted_price = reactive({
+        sq_mt_built = input$sq_mt_built
+        n_rooms = input$n_rooms
+        n_bathrooms = input$n_bathrooms
+        subtitle = input$subtitle
+        floor = input$floor
+        is_floor_under = input$is_floor_under
+        neighborhood_id = input$neighborhood_id
+        house_type_id = input$house_type_id
+        is_renewal_needed = input$is_renewal_needed
+        has_central_heating = input$has_central_heating
+        has_individual_heating = input$has_individual_heating
+        built_year = input$built_year
+        has_ac = input$has_ac
+        has_fitted_wardrobes = input$has_fitted_wardrobes
+        has_lift = input$has_lift
+        has_pool = input$has_pool
+        has_storage_room = input$has_storage_room
+        energy_certificate = input$energy_certificate
+        orientation = input$orientation
+        is_exterior = input$is_exterior
+        has_terrace = input$has_terrace
+        is_accessible = input$is_accessible
+        has_parking = input$has_parking
+        has_garden = input$has_garden
+        has_balcony = input$has_balcony
+        has_green_zones = input$has_green_zones
+        is_parking_included_in_price = input$is_parking_included_in_price
+
+    #Crear un dataframe con los valores introducidos por el usuario
+    user_data <- data.frame(subtitle = subtitle,
+                            sq_mt_built = sq_mt_built,
+                            n_rooms = n_rooms,
+                            n_bathrooms = n_bathrooms,
+                            floor = floor,
+                            is_floor_under = is_floor_under,
+                            neighborhood_id = neighborhood_id,
+                            buy_price = buy_price,
+                            buy_price_by_area = buy_price_by_area,
+                            house_type_id = house_type_id,
+                            is_renewal_needed = is_renewal_needed,
+                            built_year = built_year,
+                            has_central_heating = has_central_heating,
+                            has_individual_heating = has_individual_heating,
+                            has_ac = has_ac,
+                            has_fitted_wardrobes = has_fitted_wardrobes,
+                            has_lift = has_lift,
+                            is_exterior = is_exterior,
+                            has_garden = has_garden,
+                            has_pool = has_pool,
+                            has_terrace = has_terrace,
+                            has_balcony = has_balcony,
+                            has_storage_room = has_storage_room,
+                            is_accessible = is_accessible,
+                            has_green_zones = has_green_zones,
+                            energy_certificate = energy_certificate,
+                            has_parking = has_parking,
+                            is_parking_included_in_price = is_parking_included_in_price,
+                            orientation = orientation)
+    
+    predicted_price = predict(elasticnet_model, newdata = user_data)
+    return(predicted_price)
   })
   
-  # Genera una salida para visualizar los resultados del modelo
-  output$plot <- renderPlot({
-    numrooms <- input$n_rooms
-    predicted <- predicted_price()
-    
-    ggplot(new_data, aes(x = n_rooms, y = buy_price)) +
-      geom_point() +
-      geom_smooth(method = "lm") +
-      geom_vline(xintercept = numrooms, linetype = "dashed", color = "red") +
-      geom_hline(yintercept = predicted, linetype = "dashed", color = "blue") +
-      labs(, x = "Number of rooms", y = "Price of house")
-  })
+  
+  output$predicted_results <- renderText({
+      if (!is.null(input$subtitle) && !is.null(input$neighborhood_id) && input$neighborhood_id != "Select a neighborhood" && !is.null(input$sq_mt_built) && !is.null(input$n_rooms) && !is.null(input$n_bathrooms) && !is.null(input$house_type_id)) {
+        predicted_price()
+    } else {
+        
+    }
+})
+  output$predicted_chart <- renderPlot({
+  plot_data <- predict_price_chart(predicted_price())
+  plot(plot_data)
+})
+  
+  #If the user is not really sure about what he wants ---> still need to design this part
+  output$predicted_output <- renderUI({
+  if (input$variable == "Not important") {
+    print("Select a variable to continue")
+  } else {
+    variable_name <- input$variable
+    predicted_output <- predict_price_output(variable_name)
+    div(predicted_output)
+  }
+})
+  output$all_predicted_results <- renderPrint({
+  tagList(output$predicted_results, output$predicted_chart, output$predicted_output)
+})
 }
 
-# Crea la aplicación Shiny
-shinyApp(ui, server)
+shinyApp(ui = ui, server = server)
 ```
