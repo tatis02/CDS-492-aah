@@ -1,0 +1,485 @@
+---
+title: "Madrid housing"
+author: "Annunziata Alvarez-cascos"
+date: "Spring, 2023"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+always_allow_html: yes
+variant: gfm
+preserve_yaml: yes
+leafletmap: yes
+---
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+
+```{r import libraries}
+rm(list=ls()) 
+library(leaflet)
+library(tidyverse)
+library(patchwork)
+library(MASS)
+library(caret)
+library(stringi)
+library(dplyr)
+library(ggplot2)
+```
+
+Load the datasets
+
+```{r Load datasets}
+data  = read.csv("houses_Madrid.csv")
+setwd("~/Desktop/CDS 492/CDS-492-aah")
+subtitle_data = read.csv("subtitles.csv", sep = ";", header = F)
+colnames(subtitle_data) = c("subtitle", "lat", "long")
+subtitle_data = subtitle_data[-c(1,2),]
+#View(data)
+#View(subtitle_data)
+```
+
+Cleaning the dataset
+
+```{r data cleaning}
+#We delete the empty variables in the dataset and overfitting variables
+data$X = NULL
+data$latitude = NULL
+data$longitude = NULL
+data$portal = NULL
+data$door = NULL
+data$rent_price = NULL
+data$rent_price_by_area = NULL
+data$is_rent_price_known = NULL
+data$are_pets_allowed = NULL
+data$is_furnished = NULL
+data$is_kitchen_equipped = NULL
+data$has_private_parking = NULL
+data$has_public_parking = NULL
+data$operation = NULL
+data$raw_address = NULL
+data$sq_mt_useful = NULL
+data$is_exact_address_hidden = NULL
+data$is_buy_price_known = NULL
+data = subset(data, data$built_year <= 2022)
+
+
+#If a value in one of this variables is empty we assume is False or give it a name and translate variables if needed
+data$is_floor_under[data$is_floor_under == ""] = "False"
+data$is_new_development[data$is_new_development == ""] = "False"
+data$has_central_heating[data$has_central_heating == ""] = "False"
+data$has_individual_heating[data$has_individual_heating == ""] = "False"
+data$has_ac[data$has_ac == ""] = "False"
+data$has_fitted_wardrobes[data$has_fitted_wardrobes == ""] = "False"
+data$has_lift[data$has_lift == ""] = "False"
+data$is_exterior[data$is_exterior == ""] = "False"
+data$has_garden[data$has_garden == ""] = "False"
+data$has_pool[data$has_pool == ""] = "False"
+data$has_terrace[data$has_terrace == ""] = "False"
+data$has_balcony[data$has_balcony == ""] = "False"
+data$has_storage_room[data$has_storage_room == ""] = "False"
+data$is_accessible[data$is_accessible == ""] = "False"
+data$is_parking_included_in_price[data$is_parking_included_in_price == ""] = "False"
+data$has_green_zones[data$has_green_zones == ""] = "False"
+data$is_orientation_east[data$is_orientation_east == ""] = "False"
+data$is_orientation_west[data$is_orientation_west == ""] = "False"
+data$is_orientation_north[data$is_orientation_north == ""] = "False"
+data$is_orientation_south[data$is_orientation_south == ""] = "False"
+data$house_type_id[data$house_type_id == "HouseType 1: Pisos"] = "HouseType 1: Flat"
+data$house_type_id[data$house_type_id == "HouseType 2: Casa o chalet"] = "HouseType 2: Detached house"
+data$house_type_id[data$house_type_id == "HouseType 4: Dúplex"] = "HouseType 4: Duplex"
+data$house_type_id[data$house_type_id == "HouseType 5: Áticos"] = "HouseType 5: Attics"
+data$house_type_id[data$house_type_id == ""] = "HouseType 3: Studio"
+
+#We convert needed variables to factor
+data$subtitle = as.factor(data$subtitle)
+data$is_floor_under = as.factor(data$is_floor_under)
+data$house_type_id = as.factor(data$house_type_id)
+data$is_renewal_needed = as.factor(data$is_renewal_needed)
+data$is_new_development = as.factor(data$is_new_development) #as it only has one factor we have to delete it 
+
+data$has_central_heating = as.factor(data$has_central_heating)
+data$has_individual_heating = as.factor(data$has_individual_heating)
+data$has_ac = as.factor(data$has_ac)
+data$has_fitted_wardrobes = as.factor(data$has_fitted_wardrobes)
+data$house_type_id = as.factor(data$house_type_id)
+data$has_lift = as.factor(data$has_lift)
+data$is_exterior = as.factor(data$is_exterior)
+data$has_garden = as.factor(data$has_garden)
+data$has_pool = as.factor(data$has_pool)
+data$has_terrace = as.factor(data$has_terrace)
+data$has_balcony = as.factor(data$has_balcony)
+data$has_storage_room = as.factor(data$has_storage_room)
+data$is_accessible = as.factor(data$is_accessible)
+data$has_green_zones = as.factor(data$has_green_zones)
+data$energy_certificate = as.factor(data$energy_certificate)
+data$has_parking = as.factor(data$has_parking)
+data$is_parking_included_in_price = as.factor(data$is_parking_included_in_price)
+data$is_orientation_north = as.factor(data$is_orientation_north)
+data$is_orientation_south = as.factor(data$is_orientation_south)
+data$is_orientation_east = as.factor(data$is_orientation_east)
+data$is_orientation_west = as.factor(data$is_orientation_west)
+
+#Recreate some variables
+data$subtitle = stri_sub(data$subtitle, 1 ,-9)
+
+north = data$is_orientation_north == "True"
+south = data$is_orientation_south == "True"
+east = data$is_orientation_east == "True"
+west = data$is_orientation_west == "True"
+data$orientation[north] = "north"
+data$orientation[south] = "south"
+data$orientation[east] = "east"
+data$orientation[west] = "west"
+
+data$is_orientation_north = NULL
+data$is_orientation_south = NULL
+data$is_orientation_east = NULL
+data$is_orientation_west = NULL
+
+#shuffle rows and merge both datasets
+data = merge(data, subtitle_data, by = "subtitle")
+n = nrow(data)
+shuffled_indices = sample(1:n)
+data = data[shuffled_indices, ]
+data$lat = as.numeric(sub(",", ".", data$lat, fixed = TRUE))
+data$long = as.numeric(sub(",", ".", data$long, fixed = TRUE))
+```
+
+
+
+```{r summary of clean dataset}
+names(data)
+dim(data)
+str(data)
+
+```
+
+Split into training and testing set for our future model
+
+```{r train and test partition}
+idx=createDataPartition(data$buy_price, p = 0.75, list = FALSE)  
+training = data[idx,]
+testing = data[-idx,]
+nrow(training) #75%
+nrow(testing) 
+```
+
+```{r more cleaning}
+
+colSums(is.na(training))
+colSums(is.na(testing))
+training$is_new_development = NULL
+training$orientation = as.factor(training$orientation)
+training$neighborhood_id = as.factor(training$neighborhood_id)
+testing$is_new_development = NULL
+testing$orientation = as.factor(testing$orientation)
+testing$neighborhood_id = as.factor(testing$neighborhood_id)
+training  = subset(training, select = -c(n_floors, sq_mt_allotment,parking_price, id , title , street_name, street_number, lat, long ))
+testing  = subset(testing, select = -c(n_floors, sq_mt_allotment,parking_price, id , title , street_name, street_number, lat, long ))
+training = na.omit(training)
+testing = na.omit(testing)
+
+training$neighborhood_id = factor(training$neighborhood_id, levels = unique(training$neighborhood_id))
+testing$neighborhood_id = factor(testing$neighborhood_id, levels = unique(training$neighborhood_id))
+
+training$floor <- factor(training$floor, levels = unique(training$floor))
+testing$floor <- factor(testing$floor, levels = unique(training$floor))
+
+training$subtitle <- factor(training$subtitle, levels = unique(training$subtitle))
+testing$subtitle <- factor(testing$subtitle, levels = unique(training$subtitle))
+```
+####NOW MACHINE LEARNING
+
+
+```{r random forest total}
+
+#Random Forest
+library(randomForest)
+
+#param_grid <-expand.grid(mtry = c(2, 4, 6), ntree = seq(200, 700, 50))
+param_grid <-expand.grid(mtry = c(2, 4, 6))
+ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+
+training2 = training[,-c(1,7)]
+testing2 = testing[,-c(1,7)]
+rf <- train(buy_price ~ ., data = training2, method = "rf",
+                  tuneGrid = param_grid, trControl = ctrl)
+
+
+rf$bestTune
+#rf_model <- randomForest(buy_price ~ ., data = training, mtry = rf$bestTune$mtry, importance = TRUE)
+#Error in randomForest.default(m, y, ...) : 
+#Can not handle categorical predictors with more than 53 categories
+
+
+rf_model <- randomForest(buy_price ~ ., data = training2, mtry = rf$bestTune$mtry, importance = TRUE)
+
+pred <- predict(rf_model, newdata = testing2)
+accuracy <- 1 - mean(abs(pred - testing2$buy_price))/mean(testing2$buy_price) #there is a na in pred
+accuracy
+#89.92%
+varImpPlot(rf_model)
+```
+
+```{r big PCA}
+library(stats)
+library(factoextra)
+set = training
+
+set$n_rooms = as.numeric(set$n_rooms)
+set$buy_price = as.numeric(set$buy_price)
+set$buy_price_by_area = as.numeric(set$buy_price_by_area)
+
+set$floor = as.numeric(set$floor)
+set$neighborhood_id = as.numeric(set$neighborhood_id)
+set$is_floor_under = as.numeric(set$is_floor_under)
+set$is_renewal_needed = as.numeric(set$is_renewal_needed)
+set$has_central_heating = as.numeric(set$has_central_heating)
+set$has_individual_heating = as.numeric(set$has_individual_heating)
+set$has_ac = as.numeric(set$has_ac)
+set$has_fitted_wardrobes = as.numeric(set$has_fitted_wardrobes)
+set$has_lift = as.numeric(set$has_lift)
+set$is_exterior = as.numeric(set$is_exterior)
+set$has_garden = as.numeric(set$has_garden)
+set$has_pool = as.numeric(set$has_pool)
+set$has_terrace = as.numeric(set$has_terrace)
+set$has_balcony = as.numeric(set$has_balcony)
+set$has_storage_room = as.numeric(set$has_storage_room)
+set$is_accessible = as.numeric(set$is_accessible)
+set$has_green_zones = as.numeric(set$has_green_zones)
+set$energy_certificate = as.numeric(set$energy_certificate)
+set$has_parking = as.numeric(set$has_parking)
+set$orientation = as.numeric(set$orientation)
+set$house_type_id = as.numeric(set$house_type_id)
+
+
+df_mean <- aggregate(set[, c('sq_mt_built', 'n_rooms', 'n_bathrooms', 'buy_price', 'buy_price_by_area', 'floor', 'neighborhood_id', 'is_floor_under', 'house_type_id', 'is_renewal_needed',
+                                  'has_central_heating','has_individual_heating', 'has_ac', 'has_fitted_wardrobes', 'has_lift',
+                                  'is_exterior', 'has_garden', 'has_pool', 'has_terrace','has_balcony', 'has_storage_room', 'is_accessible',
+                                  'has_green_zones', 'energy_certificate', 'has_parking', 'orientation')], 
+                     by = list(district = set$subtitle), FUN = mean)
+df_mean
+
+# Select the variables to use for clustering and dimensionality reduction
+X <- df_mean[, c('sq_mt_built', 'n_rooms', 'n_bathrooms', 'buy_price', 'buy_price_by_area', 'floor', 'neighborhood_id', 'is_floor_under', 'house_type_id', 'is_renewal_needed',
+                 'has_central_heating','has_individual_heating', 'has_ac', 'has_fitted_wardrobes', 'has_lift',
+                 'is_exterior', 'has_garden', 'has_pool', 'has_terrace','has_balcony', 'has_storage_room', 'is_accessible',
+                 'has_green_zones', 'energy_certificate', 'has_parking', 'orientation')]
+
+# Scale the data using scale()
+X_scaled <- scale(X)
+
+# Apply K-means clustering with 3 clusters
+set.seed(10)
+kmeans <- kmeans(X_scaled, centers = 3)
+
+# Plot the results using fviz_cluster()
+fviz_cluster(kmeans, data = X_scaled, geom = 'point', pointsize = 2) +
+  labs(title = 'Cluster Assignments by District') +
+  geom_text(aes(label = df_mean$district), size = 3, nudge_x = 0.5, nudge_y = 0.5)
+groups = kmeans$cluster
+
+# Crear un data frame con los nombres de los distritos y su grupo correspondiente
+district_groups = data.frame(subtitle = df_mean$district, group = groups)
+
+# Ordenar el data frame por grupo y distrito
+district_groups = district_groups[order(district_groups$group, district_groups$subtitle), ]
+
+# Imprimir los nombres de los distritos por grupo
+for (i in unique(groups)) {
+  g = list(district_groups[district_groups$group == i, ]$subtitle)
+  cat("Group", i, ":\n")
+  print(g)
+  cat("\n")
+}
+
+# Apply PCA for dimensionality reduction
+pca <- prcomp(X_scaled, scale = TRUE)
+
+# Plot the results using fviz_pca_biplot()
+fviz_pca_biplot(pca, col.var = 'contrib', gradient.cols = c('#FFEDA0', '#F03B20'))
+pca
+sort(pca$rotation[,1])
+
+```
+
+
+```{r big Kmeans}
+training$n_rooms = as.numeric(training$n_rooms)
+training$buy_price = as.numeric(training$buy_price)
+training$buy_price_by_area = as.numeric(training$buy_price_by_area)
+training = na.omit(training)
+df_mean <- aggregate(training[, c('sq_mt_built', 'n_rooms',  'buy_price', 'buy_price_by_area', 'n_bathrooms')], 
+                     by = list(district = training$subtitle), FUN = mean)
+df_mean
+
+# Select the variables to use for clustering and dimensionality reduction
+X <- df_mean[, c('sq_mt_built', 'n_rooms',  'buy_price', 'buy_price_by_area', 'n_bathrooms')]
+
+# Scale the data using scale()
+X_scaled <- scale(X)
+
+# Apply K-means clustering with 3 clusters
+set.seed(10)
+
+library(ggplot2)
+
+# Calcula la suma de cuadrados dentro de los clusters para diferentes valores de k
+suma_cuadrados <- c()
+for (k in 1:10) {
+  modelo <- kmeans(X, centers = k)
+  suma_cuadrados[k] <- modelo$tot.withinss
+}
+
+# Grafica la suma de cuadrados en función del número de clusters
+datos_codo <- data.frame(k = 1:10, suma_cuadrados = suma_cuadrados)
+ggplot(datos_codo, aes(x = k, y = suma_cuadrados)) +
+  geom_line() +
+  geom_point() 
+    
+
+kmeans <- kmeans(X_scaled, centers = 3)
+
+# Plot the results using fviz_cluster()
+fviz_cluster(kmeans, data = X_scaled, geom = 'point', pointsize = 2) +
+  labs(title = 'Cluster Assignments by District') +
+  geom_text(aes(label = df_mean$district), size = 3, nudge_x = 0.5, nudge_y = 0.5)
+groups = kmeans$cluster
+
+# Crear un data frame con los nombres de los distritos y su grupo correspondiente
+district_groups = data.frame(subtitle = df_mean$district, group = groups)
+
+# Ordenar el data frame por grupo y distrito
+district_groups = district_groups[order(district_groups$group, district_groups$subtitle), ]
+
+# Imprimir los nombres de los distritos por grupo
+for (i in unique(groups)) {
+  g = list(district_groups[district_groups$group == i, ]$subtitle)
+  cat("Group", i, ":\n")
+  print(g)
+  cat("\n")
+}
+# Apply PCA for dimensionality reduction
+pca <- prcomp(X_scaled, scale = TRUE)
+
+# Plot the results using fviz_pca_biplot()
+fviz_pca_biplot(pca, col.var = 'contrib', gradient.cols = c('#FFEDA0', '#F03B20'))
+pca
+sort(pca$rotation[,1])
+
+
+df_mean$groups=district_groups$group[match(df_mean$district, district_groups$subtitle)]
+obs1=subset(df_mean, groups == 1)
+obs2=subset(df_mean, groups == 2)
+obs3=subset(df_mean, groups == 3)
+summary(obs1)
+summary(obs2)
+summary(obs3)
+
+
+```
+
+
+
+```{r subset}
+training = training[, c('subtitle', 'sq_mt_built', 'n_rooms',  'buy_price', 'buy_price_by_area', 'n_bathrooms')]
+testing = testing[, c('subtitle', 'sq_mt_built', 'n_rooms',  'buy_price', 'buy_price_by_area', 'n_bathrooms')]
+```
+
+```{r decision trees}
+library(rpart)
+library(rpart.plot)
+
+#Regression tree
+
+set.seed(123)
+param_grid <-expand.grid(cp = seq(0.01, 0.5, 0.01))#, maxdepth = seq(2, 10, 1), 
+   #                                     minsplit = seq(10, 100, 10), minbucket = seq(2, 20, 1))
+
+#It doesn't work unless I get rid of the others hyperparams
+
+#param_grid <-expand.grid(cp = seq(0.01, 0.5, 0.01))
+ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+
+
+reg_tree <- train(buy_price ~ ., data = training, method = "rpart",
+                  tuneGrid = param_grid, trControl = ctrl)
+
+
+reg_tree$bestTune
+rt_model <- rpart(buy_price ~ ., data = training, method = "anova",
+                     cp = reg_tree$bestTune$cp)
+pred <- predict(rt_model, newdata = testing)
+accuracy <- 1 - mean(abs(pred - testing$buy_price))/mean(testing$buy_price)
+accuracy #76.62%
+
+rpart.plot(rt_model)
+
+```
+
+```{r random foresty}
+```
+
+
+```{r random foresty}
+#Random Forest
+library(randomForest)
+
+#param_grid <-expand.grid(mtry = c(2, 4, 6), ntree = seq(200, 700, 50))
+param_grid <-expand.grid(mtry = seq(2, 4, 1))
+ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+
+training2 = training[,-1]
+testing2 = testing[,-1]
+rf <- train(buy_price ~ ., data = training2, method = "rf",
+            tuneGrid = param_grid, trControl = ctrl)
+
+rf$bestTune
+#rf_model <- randomForest(buy_price ~ ., data = training, mtry = rf$bestTune$mtry, importance = TRUE)
+#Error in randomForest.default(m, y, ...) : 
+#Can not handle categorical predictors with more than 53 categories
+
+
+rf_model <- randomForest(buy_price ~ ., data = training2, mtry = rf$bestTune$mtry, importance = TRUE)
+
+pred <- predict(rf_model, newdata = testing2)
+accuracy <- 1 - mean(abs(pred - testing2$buy_price))/mean(testing2$buy_price) #there is a na in pred
+accuracy
+plot(rf)
+#98.25%
+varImpPlot(rf_model)
+
+tree <- getTree(rf_model, k=1)
+
+# Plot the tree
+plot(tree)
+
+```
+
+```{r SVM}
+
+library(e1071)
+param_grid = expand.grid(degree = seq(1,10,1), scale = 1, C = seq(0.5, 3, 0.5) )
+
+ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+
+
+svm <- train(buy_price ~ ., data = training, method = "svmPoly",
+                  tuneGrid = param_grid, trControl = ctrl)
+
+svm$bestTune
+svm_model = svm(buy_price~., data = training, type = "C-classification", kernel = "polynomial",
+          degree = svm$bestTune$degree)
+
+pred <- predict(svm_model, newdata = testing)
+accuracy <- 1 - mean(abs(pred - testing$buy_price))/mean(testing$buy_price)
+accuracy
+```
+
+
+
+
