@@ -1,5 +1,4 @@
 # tatis02.github.io
-<!doctype html>
 <html>
 	<head>
 	WELCOME
