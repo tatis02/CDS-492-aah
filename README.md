@@ -1,7 +1,6 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>Houses in Madrid Pricing Predictor App README</title>
   </head>
   <body>
     <h1>Houses in Madrid Pricing Predictor App</h1>
@@ -10,7 +9,7 @@
     <ol>
       <li>Visit the app's website or open the app on your device.</li>
       <li>Enter the required information about the property you're interested in, such as the location, number of bedrooms, and square footage.</li>
-      <li>Click the "Predict" button to generate an estimated price for the property.</li>
+      <li>After all the information is entered the price will appear! You can make as many changes as you want, the predicted price will automatically regenarate according to the changes made.</li>
     </ol>
     <h2>Features</h2>
     <ul>
@@ -20,10 +19,6 @@
       <li>Fast results</li>
     </ul>
     <h2>Technologies Used</h2>
-    <p>The Houses in Madrid Pricing Predictor App was built using advanced machine learning algorithms, including regression analysis and neural networks, to analyze historical data on real estate prices in Madrid. The app was built using modern web development technologies, including HTML, CSS, and JavaScript, and is hosted on a secure, scalable cloud infrastructure.</p>
-    <h2>Support</h2>
-    <p>If you have any questions or issues with the Houses in Madrid Pricing Predictor App, please contact our support team at <a href="mailto:support@madridhousepricing.com">support@madridhousepricing.com</a>.</p>
-    <h2>License</h2>
-    <p>The Houses in Madrid Pricing Predictor App is licensed under the MIT License. You are free to use, copy, modify, and distribute the app as long as you include the original copyright notice and disclaimer.</p>
+    <p>The Houses in Madrid Pricing Predictor App was built using advanced machine learning algorithms, including regression analysis and neural networks, to analyze historical data on real estate prices in Madrid. The app was built using modern web development technologies such as R studio.</p>
   </body>
 </html>
