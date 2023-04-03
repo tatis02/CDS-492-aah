@@ -17,7 +17,7 @@ leafletmap: yes
 knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
 ```
 
-```{r}
+```{r import libraries}
 rm(list=ls()) 
 library(leaflet)
 library(tidyverse)
@@ -27,23 +27,28 @@ library(caret)
 library(stringi)
 library(dplyr)
 library(ggplot2)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(e1071)
+library(stats)
+library(factoextra)
+library(car)
 ```
 
 Load the datasets
 
-```{r}
+```{r Load datasets}
 data  = read.csv("houses_Madrid.csv")
 
 subtitle_data = read.csv("subtitles.csv", sep = ";", header = F)
 colnames(subtitle_data) = c("subtitle", "lat", "long")
 subtitle_data = subtitle_data[-c(1,2),]
-#View(data)
-#View(subtitle_data)
 ```
 
 Cleaning the dataset
 
-```{r}
+```{r data cleaning}
 #We delete the empty variables in the dataset and overfitting variables
 data$X = NULL
 data$latitude = NULL
@@ -148,10 +153,8 @@ data$lat = as.numeric(sub(",", ".", data$lat, fixed = TRUE))
 data$long = as.numeric(sub(",", ".", data$long, fixed = TRUE))
 ```
 
-```{r}
-#Summary of clean dataset
+```{r summary of clean dataset}
 names(data)
-
 dim(data)
 str(data)
 
@@ -159,9 +162,8 @@ str(data)
 
 Split into training and testing set for our future model
 
-```{r}
+```{r train and test partition}
 idx=createDataPartition(data$buy_price, p = 0.75, list = FALSE)  
-
 training = data[idx,]
 testing = data[-idx,]
 nrow(training) #75%
@@ -173,7 +175,7 @@ nrow(testing)
 
 Let's visualize on the map whether if the prices are well distributed in the training and testing sets.
 
-```{r}
+```{r dist prices map}
 leaflet() %>% 
   addProviderTiles(providers$CartoDB.Positron) %>%
   setView(lng=median(data$long), lat=median(data$lat), zoom = 11) %>%
@@ -189,7 +191,7 @@ leaflet() %>%
 #grey circles mean we might have in that district both testing and training, as the localizations correspond to each district and not each porperty
 ```
 
-```{r}
+```{r price dist}
 training %>% ggplot(aes(x=buy_price)) + geom_density(fill="navyblue") + scale_x_log10()
 #Prices seem to be symmetric but with high variability.
 ```
@@ -198,14 +200,14 @@ Let explore a bit more into detail our variables and how they affect the price
 
 1.  Analysis of the distribution of the prices of the properties: exploring the average price tendency in the different districts in Madrid.
 
-```{r, warning=FALSE , message=FALSE}
+```{r dist prices, message=FALSE, warning=FALSE}
 data_p = training %>% dplyr::select(subtitle, buy_price, lat, long) %>% group_by(subtitle,  lat, long) %>%summarise(mean_price = mean(buy_price))
 
 ggplot(data_p, aes(x = subtitle, y = mean_price)) +
   geom_point() +
   geom_smooth(method = "lm", se = FALSE) +
   labs(title = "Average price distribution",
-       x = "Districtw",
+       x = "Districts",
        y = "Average price")
 
 #As in the plot we cannot properly see the districts but an oversll distribution, let's see which are the 
@@ -235,7 +237,7 @@ map %>% addLegend(position="bottomleft", pal = color_pal, values = ~mean_price, 
 
 2.Analysis of the properties sizes tendency in the different districts in Madrid.
 
-```{r, warning=FALSE , message=FALSE}
+```{r size tendency, message=FALSE, warning=FALSE}
 data_p = training %>% dplyr::select(subtitle, sq_mt_built, lat, long) %>% group_by(subtitle, lat, long) %>% summarise(mean_sq = mean(sq_mt_built))
 
 ggplot(data_p, aes(x = subtitle, y = mean_sq)) +
@@ -259,7 +261,7 @@ addCircleMarkers(lng = ~long,
              fillOpacity = 0.3,
              label = data_p$subtitle)
 
-map %>% addLegend(position="bottomleft", pal = color_pal, values = ~mean_sq, bins=5)
+map
 
 
 
@@ -267,7 +269,7 @@ map %>% addLegend(position="bottomleft", pal = color_pal, values = ~mean_sq, bin
 
 Is there any linear relation between the size and the price of the houses?
 
-```{r, warning=FALSE}
+```{r prize vs size, warning=FALSE}
 
 ggplot(training, aes(x=sq_mt_built, y=buy_price)) + xlab("size") +ylab("price") + 
   geom_point() + ggtitle("Price vs size of living area")
@@ -279,7 +281,7 @@ ggplot(training, aes(x = log(sq_mt_built), y = log(buy_price) )) + xlab("size") 
 
 3.  Analysis of the antiquity of the properties in relation to the price.
 
-```{r}
+```{r price vs antiquity}
 ggplot(training, aes(x=built_year, y=buy_price)) + xlab("year built") + ylab("price") + 
   geom_point() + ggtitle("Price vs antiquity of the house")
 
@@ -288,7 +290,7 @@ ggplot(training, aes(x=built_year, y=buy_price)) + xlab("year built") + ylab("pr
 
 4.  Exploration of location of properties.
 
-```{r, message=FALSE}
+```{r location, message=FALSE}
 data_num = training %>% dplyr::select(subtitle, lat, long) %>% group_by(subtitle, lat, long) %>% summarise(count = length(subtitle))
 
 paste(data_num$subtitle[which.max(data_num$count)] , data_num$count[which.max(data_num$count)], sep = " -> ") #Moncloa -> 271
@@ -312,9 +314,9 @@ leaflet(data_num) %>%
 
 5.  Distribution of types of properties: in general, in the most expensive district and in the cheapest district.
 
-```{r}
+```{r types of props}
 table = table(training$house_type_id)
-pie(table, labels = paste(names(table), "\n", table, sep=""), main="Pie Chart of Subtitle")
+pie(table, labels = paste(names(table), "\n", table, sep=""), main="Pie Chart")
 
 idx1 = training$subtitle == most_expensive
 table = table(training$house_type_id[idx1])
@@ -329,47 +331,47 @@ pie(table, labels = paste(names(table), "\n", table, sep=""), main=paste("Pie Ch
 
 6.  Analysis of the prices in relation with the factor variables
 
-```{r}
-wrap_plots(ggplot(data, aes(x = buy_price, color = has_lift, bins = 40)) +
+```{r factor vars analysis}
+wrap_plots(ggplot(training, aes(x = buy_price, color = has_lift, bins = 40)) +
   geom_freqpoly(binwidth = 10000),
-ggplot(data, aes(x = buy_price, color = is_renewal_needed, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = is_renewal_needed, bins = 40)) +
   geom_freqpoly(binwidth = 10000) ,
-ggplot(data, aes(x = buy_price, color = is_new_development, fill = is_new_development, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = is_new_development, fill = is_new_development, bins = 40)) +
   geom_freqpoly(binwidth = 10000) , ncol = 1, nrow = 3)
 
-wrap_plots(ggplot(data, aes(x = buy_price, color = has_central_heating, bins = 40)) +
+wrap_plots(ggplot(training, aes(x = buy_price, color = has_central_heating, bins = 40)) +
   geom_freqpoly(binwidth = 10000) ,
-ggplot(data, aes(x = buy_price, color = has_individual_heating, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = has_individual_heating, bins = 40)) +
  geom_freqpoly(binwidth = 10000) ,
-ggplot(data, aes(x = buy_price, color = has_ac, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = has_ac, bins = 40)) +
   geom_freqpoly(binwidth = 10000) ,ncol = 1, nrow = 3)
 
-wrap_plots(ggplot(data, aes(x = buy_price, color = has_fitted_wardrobes, bins = 40)) +
+wrap_plots(ggplot(training, aes(x = buy_price, color = has_fitted_wardrobes, bins = 40)) +
   geom_freqpoly(binwidth = 10000) ,
-ggplot(data, aes(x = buy_price, color = is_exterior, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = is_exterior, bins = 40)) +
   geom_freqpoly(binwidth = 10000) ,
-ggplot(data, aes(x = buy_price, color = has_garden, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = has_garden, bins = 40)) +
   geom_freqpoly(binwidth = 10000),ncol = 1, nrow = 3)
 
-wrap_plots(ggplot(data, aes(x = buy_price, color = has_pool, bins = 40)) +
+wrap_plots(ggplot(training, aes(x = buy_price, color = has_pool, bins = 40)) +
  geom_freqpoly(binwidth = 10000) ,
-ggplot(data, aes(x = buy_price, color = has_terrace, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = has_terrace, bins = 40)) +
   geom_freqpoly(binwidth = 10000),
-ggplot(data, aes(x = buy_price, color = has_balcony, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = has_balcony, bins = 40)) +
   geom_freqpoly(binwidth = 10000) ,ncol = 1, nrow = 3)
 
-wrap_plots(ggplot(data, aes(x = buy_price, color = has_storage_room, bins = 40)) +
+wrap_plots(ggplot(training, aes(x = buy_price, color = has_storage_room, bins = 40)) +
   geom_freqpoly(binwidth = 10000) ,
-ggplot(data, aes(x = buy_price, color = is_accessible, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = is_accessible, bins = 40)) +
   geom_freqpoly(binwidth = 10000) ,
-ggplot(data, aes(x = buy_price, color = has_green_zones, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = has_green_zones, bins = 40)) +
   geom_freqpoly(binwidth = 10000),ncol = 1, nrow = 3)
 
-wrap_plots(ggplot(data, aes(x = buy_price, color = energy_certificate, bins = 40)) +
+wrap_plots(ggplot(training, aes(x = buy_price, color = energy_certificate, bins = 40)) +
   geom_freqpoly(binwidth = 10000) ,
-ggplot(data, aes(x = buy_price, color = has_parking, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = has_parking, bins = 40)) +
   geom_freqpoly(binwidth = 10000) ,
-ggplot(data, aes(x = buy_price, color = is_parking_included_in_price, bins = 40)) +
+ggplot(training, aes(x = buy_price, color = is_parking_included_in_price, bins = 40)) +
   geom_freqpoly(binwidth = 10000), ncol = 1, nrow = 3)
 
 #As we can see, these plots don't suggest any of these variables could be used for an accurate prediction of our target variable: buy_price
@@ -378,7 +380,7 @@ ggplot(data, aes(x = buy_price, color = is_parking_included_in_price, bins = 40)
 
 Does orientation have to do with high prices?
 
-```{r}
+```{r orientation analysis}
 ori = subset(training, !is.na(training$orientation))
 ggplot(ori, aes(x = buy_price, col=orientation)) + geom_histogram(position = position_dodge()) 
 
@@ -388,7 +390,7 @@ ggplot(ori, aes(x = buy_price, col=orientation)) + geom_histogram(position = pos
 
 Let's find high correlations between the predictors we analysed at the beginning to see if they could work.
 
-```{r}
+```{r correlations}
 training$n_rooms = as.numeric(training$n_rooms)
 correlations <- cor(training[,c(4, 5, 6, 7, 8, 14, 15, 19, 38, 39 )])
 corr_price <- sort(correlations["buy_price",], decreasing = T)
@@ -516,17 +518,12 @@ vif(model)
 
 As we can see,the model is not overfitting to the training data but we have multicollinearity regarding the latitude and longitude as they should be treated as categorical variables. 
 
-```{r}
-new_training$lat = as.character(new_training$lat)
-new_training$long = as.character(new_training$long)
-new_testing$lat = as.character(new_testing$lat)
-new_testing$long = as.character(new_testing$long)
-```
+
 
 Now we are going to use some regression techniques to select the optimal model.
 
 ##MODEL SELECTION
-```{r}
+```{r data cleaning formodel selection}
 colSums(is.na(training))
 colSums(is.na(testing))
 training$is_new_development = NULL
@@ -537,8 +534,6 @@ testing$orientation = as.factor(testing$orientation)
 testing$neighborhood_id = as.factor(testing$neighborhood_id)
 training  = subset(training, select = -c(n_floors, sq_mt_allotment,parking_price, id , title , street_name, street_number, lat, long ))
 testing  = subset(testing, select = -c(n_floors, sq_mt_allotment,parking_price, id , title , street_name, street_number, lat, long ))
-training = na.omit(training)
-testing = na.omit(testing)
 
 training$neighborhood_id = factor(training$neighborhood_id, levels = unique(training$neighborhood_id))
 testing$neighborhood_id = factor(testing$neighborhood_id, levels = unique(training$neighborhood_id))
@@ -548,9 +543,12 @@ testing$floor <- factor(testing$floor, levels = unique(training$floor))
 
 training$subtitle <- factor(training$subtitle, levels = unique(training$subtitle))
 testing$subtitle <- factor(testing$subtitle, levels = unique(training$subtitle))
+
+training = na.omit(training)
+testing = na.omit(testing)
 ```
 
-```{r}
+```{r stepwise regression}
 library(car)
 library(caret)
 modelo = lm(buy_price ~. , data = training)
@@ -588,11 +586,13 @@ plot(mod_both)
 ```
 
 THE LASSO
-```{r}
+
+```{r The Lasso}
 library(glmnet)
 
 new_data = rbind(training, testing)
-x = model.matrix(buy_price ~ ., new_data)[,-7]
+new_data$buy_price_by_area = NULL #nuevo
+x = model.matrix(buy_price ~ ., new_data)[,-new_data$buy_price]
 y = new_data$buy_price
 
 lasso.fit = cv.glmnet(x, y, alpha = 1)
@@ -617,9 +617,10 @@ lasso_model = glmnet(x, y, alpha = 1, lambda = opt.lambda)
 plot(lasso.fit$glmnet.fit, 
      "lambda", label=FALSE)
 ```
+
 RIDGE REGRESSION
-```{r}
-x = model.matrix(buy_price ~., new_data)[,-7]
+```{r Ridge Regression}
+x = model.matrix(buy_price ~., new_data)[,-new_data$buy_price]
 y = new_data$buy_price
 
 ridge.fit = cv.glmnet(x, y, alpha = 0)
@@ -644,10 +645,13 @@ ridge_model = glmnet(x, y, alpha = 0, lambda = opt.lambda)
 plot(ridge.fit$glmnet.fit, 
      "lambda", label=FALSE)
 ```
-ELASTIC NET
-```{r}
 
-x = model.matrix(buy_price ~ ., training)[,-7]
+ELASTIC NET
+```{r Elastic Net}
+library(glmnet)
+training$buy_price_by_area = NULL #nuevo
+testing$buy_price_by_area = NULL #nuevo
+x = model.matrix(buy_price ~ ., training)[,-training$buy_price]
 y = training$buy_price
 set.seed(123)
 model = train(
@@ -673,74 +677,17 @@ elasticnet = train(buy_price ~ ., data = training, method = "glmnet", trControl 
 
 y.pred = predict(elasticnet, newdata = testing)
 
-accuracy = cor(y.pred, testing$buy_price) ** 2
-accuracy #92.42405%
+
+# Calculate R-squared
+rsq <- cor(y.pred, testing$buy_price)^2
+rsq
 
 elasticnet_model = glmnet(x, y, alpha = model$bestTune$alpha, lambda = opt.lambda)
 enet_coefs = coef(elasticnet_model)
 ```
+####NOW MACHINE LEARNING
 
-
-nonzero_coefs <- coef(en.fit, s = "lambda.min")[-1,]
-
-x_array <- array(x, dim = c(nrow(x), ncol(x)))
-
-# Create a new data frame with the selected predictors
-
-nonzero_vars <- names(nonzero_coefs)[nonzero_coefs != 0]
-x_selected <- x[, nonzero_vars]
-
-new_data2 <- cbind(x_selected, y)
-
-# Convert the matrix to a data frame
-new_data2 <- as.data.frame(new_data2)
-
-# Fit a linear regression model using the selected predictors
-lm_model <- lm(y ~ ., data = new_data2)
-
-mod_both = step(lm_model, direction = "both")
-summary(mod_both)
-final_mod_both = mod_both$finalModel
-
-
-summary(mod_both)$adj.r.squared
-
-par(mfrow = c(2, 2))
-plot(mod_both)
-
-
-```{r}
-library(rpart)
-library(rpart.plot)
-
-#Regression tree
-
-set.seed(123)
-#param_grid <-expand.grid(cp = seq(0.01, 0.5, 0.01), maxdepth = seq(2, 10, 1), 
-                                        #minsplit = seq(10, 100, 10), minbucket = seq(2, 20, 1))
-
-#It doesn't work unless I get rid of the others hyperparams
-
-param_grid <-expand.grid(cp = seq(0.01, 0.5, 0.01))
-ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
-
-
-reg_tree <- train(buy_price ~ ., data = training, method = "rpart",
-                  tuneGrid = param_grid, trControl = ctrl)
-
-
-reg_tree$bestTune
-rt_model <- rpart(buy_price ~ ., data = training, method = "anova",
-                     cp = reg_tree$bestTune$cp)
-pred <- predict(rt_model, newdata = testing)
-accuracy <- 1 - mean(abs(pred - testing$buy_price))/mean(testing$buy_price)
-accuracy #76.62%
-
-rpart.plot(rt_model)
-
-```
-
-```{r}
+```{r random forest total}
 
 #Random Forest
 library(randomForest)
@@ -749,8 +696,8 @@ library(randomForest)
 param_grid <-expand.grid(mtry = c(2, 4, 6))
 ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
 
-training2 = training[,-6]
-testing2 = testing[,-6]
+training2 = training[,-c(1,7)]
+testing2 = testing[,-c(1,7)]
 rf <- train(buy_price ~ ., data = training2, method = "rf",
                   tuneGrid = param_grid, trControl = ctrl)
 
@@ -770,8 +717,236 @@ accuracy
 varImpPlot(rf_model)
 ```
 
-```{r}
-#SVM
+```{r big PCA}
+library(stats)
+library(factoextra)
+set = training
+
+set$n_rooms = as.numeric(set$n_rooms)
+set$buy_price = as.numeric(set$buy_price)
+set$buy_price_by_area = as.numeric(set$buy_price_by_area)
+
+set$floor = as.numeric(set$floor)
+set$neighborhood_id = as.numeric(set$neighborhood_id)
+set$is_floor_under = as.numeric(set$is_floor_under)
+set$is_renewal_needed = as.numeric(set$is_renewal_needed)
+set$has_central_heating = as.numeric(set$has_central_heating)
+set$has_individual_heating = as.numeric(set$has_individual_heating)
+set$has_ac = as.numeric(set$has_ac)
+set$has_fitted_wardrobes = as.numeric(set$has_fitted_wardrobes)
+set$has_lift = as.numeric(set$has_lift)
+set$is_exterior = as.numeric(set$is_exterior)
+set$has_garden = as.numeric(set$has_garden)
+set$has_pool = as.numeric(set$has_pool)
+set$has_terrace = as.numeric(set$has_terrace)
+set$has_balcony = as.numeric(set$has_balcony)
+set$has_storage_room = as.numeric(set$has_storage_room)
+set$is_accessible = as.numeric(set$is_accessible)
+set$has_green_zones = as.numeric(set$has_green_zones)
+set$energy_certificate = as.numeric(set$energy_certificate)
+set$has_parking = as.numeric(set$has_parking)
+set$orientation = as.numeric(set$orientation)
+set$house_type_id = as.numeric(set$house_type_id)
+
+
+df_mean <- aggregate(set[, c('sq_mt_built', 'n_rooms', 'n_bathrooms', 'buy_price', 'buy_price_by_area', 'floor', 'neighborhood_id', 'is_floor_under', 'house_type_id', 'is_renewal_needed',
+                                  'has_central_heating','has_individual_heating', 'has_ac', 'has_fitted_wardrobes', 'has_lift',
+                                  'is_exterior', 'has_garden', 'has_pool', 'has_terrace','has_balcony', 'has_storage_room', 'is_accessible',
+                                  'has_green_zones', 'energy_certificate', 'has_parking', 'orientation')], 
+                     by = list(district = set$subtitle), FUN = mean)
+df_mean
+
+# Select the variables to use for clustering and dimensionality reduction
+X <- df_mean[, c('sq_mt_built', 'n_rooms', 'n_bathrooms', 'buy_price', 'buy_price_by_area', 'floor', 'neighborhood_id', 'is_floor_under', 'house_type_id', 'is_renewal_needed',
+                 'has_central_heating','has_individual_heating', 'has_ac', 'has_fitted_wardrobes',
+                 'is_exterior', 'has_garden', 'has_pool', 'has_terrace','has_balcony', 'has_storage_room', 'is_accessible',
+                 'has_green_zones', 'energy_certificate', 'has_parking', 'orientation')]
+
+# Scale the data using scale()
+X_scaled <- scale(X)
+
+# Apply K-means clustering with 3 clusters
+set.seed(10)
+kmeans <- kmeans(X_scaled, centers = 3)
+
+# Plot the results using fviz_cluster()
+fviz_cluster(kmeans, data = X_scaled, geom = 'point', pointsize = 2) +
+  labs(title = 'Cluster Assignments by District') +
+  geom_text(aes(label = df_mean$district), size = 3, nudge_x = 0.5, nudge_y = 0.5)
+groups = kmeans$cluster
+
+# Crear un data frame con los nombres de los distritos y su grupo correspondiente
+district_groups = data.frame(subtitle = df_mean$district, group = groups)
+
+# Ordenar el data frame por grupo y distrito
+district_groups = district_groups[order(district_groups$group, district_groups$subtitle), ]
+
+# Imprimir los nombres de los distritos por grupo
+for (i in unique(groups)) {
+  g = list(district_groups[district_groups$group == i, ]$subtitle)
+  cat("Group", i, ":\n")
+  print(g)
+  cat("\n")
+}
+
+# Apply PCA for dimensionality reduction
+pca <- prcomp(X_scaled, scale = TRUE)
+
+# Plot the results using fviz_pca_biplot()
+fviz_pca_biplot(pca, col.var = 'contrib', gradient.cols = c('#FFEDA0', '#F03B20'))
+pca
+sort(pca$rotation[,1])
+
+```
+
+```{r big Kmeans}
+training$n_rooms = as.numeric(training$n_rooms)
+training$buy_price = as.numeric(training$buy_price)
+training$buy_price_by_area = as.numeric(training$buy_price_by_area)
+training = na.omit(training)
+df_mean <- aggregate(training[, c('sq_mt_built', 'n_rooms',  'buy_price', 'buy_price_by_area', 'n_bathrooms')], 
+                     by = list(district = training$subtitle), FUN = mean)
+df_mean
+
+# Select the variables to use for clustering and dimensionality reduction
+X <- df_mean[, c('sq_mt_built', 'n_rooms',  'buy_price', 'buy_price_by_area', 'n_bathrooms')]
+
+# Scale the data using scale()
+X_scaled <- scale(X)
+
+# Apply K-means clustering with 3 clusters
+set.seed(10)
+
+library(ggplot2)
+
+# Calcula la suma de cuadrados dentro de los clusters para diferentes valores de k
+suma_cuadrados <- c()
+for (k in 1:10) {
+  modelo <- kmeans(X, centers = k)
+  suma_cuadrados[k] <- modelo$tot.withinss
+}
+
+# Grafica la suma de cuadrados en función del número de clusters
+datos_codo <- data.frame(k = 1:10, suma_cuadrados = suma_cuadrados)
+ggplot(datos_codo, aes(x = k, y = suma_cuadrados)) +
+  geom_line() +
+  geom_point() 
+    
+
+kmeans <- kmeans(X_scaled, centers = 3)
+
+# Plot the results using fviz_cluster()
+fviz_cluster(kmeans, data = X_scaled, geom = 'point', pointsize = 2) +
+  labs(title = 'Cluster Assignments by District') +
+  geom_text(aes(label = df_mean$district), size = 3, nudge_x = 0.5, nudge_y = 0.5)
+groups = kmeans$cluster
+
+# Crear un data frame con los nombres de los distritos y su grupo correspondiente
+district_groups = data.frame(subtitle = df_mean$district, group = groups)
+
+# Ordenar el data frame por grupo y distrito
+district_groups = district_groups[order(district_groups$group, district_groups$subtitle), ]
+
+# Imprimir los nombres de los distritos por grupo
+for (i in unique(groups)) {
+  g = list(district_groups[district_groups$group == i, ]$subtitle)
+  cat("Group", i, ":\n")
+  print(g)
+  cat("\n")
+}
+# Apply PCA for dimensionality reduction
+pca <- prcomp(X_scaled, scale = TRUE)
+
+# Plot the results using fviz_pca_biplot()
+fviz_pca_biplot(pca, col.var = 'contrib', gradient.cols = c('#FFEDA0', '#F03B20'))
+pca
+sort(pca$rotation[,1])
+
+
+df_mean$groups=district_groups$group[match(df_mean$district, district_groups$subtitle)]
+obs1=subset(df_mean, groups == 1)
+obs2=subset(df_mean, groups == 2)
+obs3=subset(df_mean, groups == 3)
+summary(obs1)
+summary(obs2)
+summary(obs3)
+
+
+```
+
+```{r subset}
+training = training[, c('subtitle', 'sq_mt_built', 'n_rooms',  'buy_price', 'buy_price_by_area', 'n_bathrooms')]
+testing = testing[, c('subtitle', 'sq_mt_built', 'n_rooms',  'buy_price', 'buy_price_by_area', 'n_bathrooms')]
+```
+
+```{r decision trees}
+library(rpart)
+library(rpart.plot)
+
+#Regression tree
+
+set.seed(123)
+param_grid <-expand.grid(cp = seq(0.01, 0.5, 0.01))#, maxdepth = seq(2, 10, 1), 
+   #                                     minsplit = seq(10, 100, 10), minbucket = seq(2, 20, 1))
+
+#It doesn't work unless I get rid of the others hyperparams
+
+#param_grid <-expand.grid(cp = seq(0.01, 0.5, 0.01))
+ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+
+
+reg_tree <- train(buy_price ~ ., data = training, method = "rpart",
+                  tuneGrid = param_grid, trControl = ctrl)
+
+
+reg_tree$bestTune
+rt_model <- rpart(buy_price ~ ., data = training, method = "anova",
+                     cp = reg_tree$bestTune$cp)
+pred <- predict(rt_model, newdata = testing)
+accuracy <- 1 - mean(abs(pred - testing$buy_price))/mean(testing$buy_price)
+accuracy #76.62%
+
+rpart.plot(rt_model)
+
+```
+
+```{r random forest}
+#Random Forest
+library(randomForest)
+
+#param_grid <-expand.grid(mtry = c(2, 4, 6), ntree = seq(200, 700, 50))
+param_grid <-expand.grid(mtry = seq(2, 4, 1))
+ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+
+training2 = training[,-1]
+testing2 = testing[,-1]
+rf <- train(buy_price ~ ., data = training2, method = "rf",
+            tuneGrid = param_grid, trControl = ctrl)
+
+rf$bestTune
+#rf_model <- randomForest(buy_price ~ ., data = training, mtry = rf$bestTune$mtry, importance = TRUE)
+#Error in randomForest.default(m, y, ...) : 
+#Can not handle categorical predictors with more than 53 categories
+
+
+rf_model <- randomForest(buy_price ~ ., data = training2, mtry = rf$bestTune$mtry, importance = TRUE)
+
+pred <- predict(rf_model, newdata = testing2)
+accuracy <- 1 - mean(abs(pred - testing2$buy_price))/mean(testing2$buy_price) #there is a na in pred
+accuracy
+plot(rf)
+#98.25%
+varImpPlot(rf_model)
+
+tree <- getTree(rf_model, k=1)
+
+# Plot the tree
+plot(tree)
+
+```
+
+```{r SVM}
+
 library(e1071)
 param_grid = expand.grid(degree = seq(1,10,1), scale = 1, C = seq(0.5, 3, 0.5) )
 
@@ -790,63 +965,171 @@ accuracy <- 1 - mean(abs(pred - testing$buy_price))/mean(testing$buy_price)
 accuracy
 ```
 
+```{r Neural networks}
+library(tidymodels)
+library(skimr)
+library(DataExplorer)
+library(ggpubr)
+library(mosaicData)
+library(h2o)
+
+#PREPROCESSING
+
+transformer = recipe(
+  formula = buy_price ~ .,
+  data =  training) %>%
+  step_naomit(all_predictors()) %>%
+  step_nzv(all_predictors()) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes())
+
+transformer
+
+# Se entrena el objeto recipe
+transformer_fit=prep(transformer)
+
+# Se aplican las transformaciones al conjunto de entrenamiento y de test
+training_prep = bake(transformer_fit, new_data = training)
+testing_prep = bake(transformer_fit, new_data = testing)
+
+glimpse(training_prep)
 
 
+# Inicialización del cluster
+# ==============================================================================
+h2o.init(
+  nthreads = -1,
+  max_mem_size = "4g"
+)
+
+
+# Se eliminan los datos del cluster por si ya había sido iniciado.
+h2o.removeAll()
+h2o.no_progress()
+
+#Se transfieren los datos al cluster de H2O
+training  <- as.h2o(training_prep, key = "training")
+testing   <- as.h2o(testing_prep, key = "testing")
+
+# Espacio de búsqueda de cada hiperparámetro
+
+hiperparameters <- list(
+  epochs = c(50, 100, 500),
+  hidden = list(5, 10, 25, 50, c(10, 10))
+)
+
+
+# Búsqueda por validación cruzada
+ans <- 'buy_price'
+pred <- setdiff(colnames(training), ans)
+
+grid <- h2o.grid(
+  algorithm    = "deeplearning",
+  activation   = "Rectifier",
+  x            = pred,
+  y            = ans,
+  training_frame  = training,
+  nfolds       = 3, #validacion cruzada
+  standardize  = FALSE,
+  hyper_params = hiperparameters,
+  search_criteria = list(strategy = "Cartesian"),
+  seed         = 123,
+  grid_id      = "grid"
+)
+
+# Resultados del grid
+grid_results <- h2o.getGrid(
+  sort_by = 'rmse',
+  grid_id = "grid",
+  decreasing = FALSE
+)
+
+data.frame(grid_results@summary_table)
+
+# Mejor modelo encontrado
+final_model <- h2o.getModel(grid_results@model_ids[[1]])
+h2o.saveModel(model = final_model, path = "~/Desktop/CDS 492/CDS-492-aah/final_model")
+
+preds <- h2o.predict(
+  object  = final_model,
+  newdata = testing
+)
+
+pred <- h2o.predict(final_model, newdata = testing)
+accuracy <- 1 - mean(abs(pred - testing$buy_price))/mean(testing$buy_price) #there is a na in pred
+accuracy #0.9342887
+
+preds <- preds %>%
+  as_tibble() %>%
+  mutate(val = as.vector(testing$buy_price))
+
+preds %>% head(10)
+
+final_model@allparameters
+
+```
 Lets build an application with Elastic net model.
-```{r}
+```{r App code}
 library(shiny)
+library(h2o)
 ui <- fluidPage(
   titlePanel("House price prediction"),
   sidebarLayout(
     sidebarPanel(
-      numericInput("sq_mt_built", "Introduce the square meters of the house you are looking for:", value = 0, min =15),
-      numericInput("n_rooms", "Introduce the number of rooms:", value = 0, min = 0),
-      numericInput("n_bathrooms", "Introduce the number of bathrooms:", value = 0, min = 0),
+      numericInput("sq_mt_built", "Introduce the square meters of the house you are looking for:", min =15, max = 999 , value = 100),
+      numericInput("n_rooms", "Introduce the number of rooms:", value = 3, min = 0, max = 24),
+      numericInput("n_bathrooms", "Introduce the number of bathrooms:", value = 2, min = 1, max = 14),
       selectInput("subtitle", "Introduce the district you want to live in:", choices = sort(unique(data$subtitle))),
       selectInput("neighborhood_id", "Introduce the neighborhood you want to live in:", choices = "Select a district first"),
       selectInput("house_type_id", "What kind of house would you like to live in?:", choices = unique(data$house_type_id)),
       conditionalPanel(
-      condition = "input.house_type_id != 'HouseType 2: Detached house'",
-      selectInput("floor", "Select floor number:", choices = c("Not important", sort(unique(data$floor))))),
+        condition = "input.house_type_id != 'HouseType 2: Detached house'",
+        selectInput("floor", "Select floor number:", choices = c(sort(unique(data$floor))))),
       
-      selectInput("is_floor_under", "Is floor under?:", choices=c("Not important", "True", "False")),
-      selectInput("is_renewal_needed", "Is renewal needed?:", choices=c("Not important", "True", "False")),
-      selectInput("built_year", "Year the house was built in:", choices=c("Not important", sort(unique(data$built_year)))),
-      selectInput("has_central_heating", "Has central heating?:", choices=c("Not important", "True", "False")),
-      selectInput("has_individual_heating", "Has individual heating?:", choices=c("Not important", "True", "False")),
-      selectInput("has_ac", "Do you want to have AC?:", choices=c("Not important", "True", "False")),
-      selectInput("has_fitted_wardrobes", "Do you want to have fitted wardrobes?:", choices=c("Not important", "True", "False")),
-      selectInput("has_lift", "Do you want to have a lift?:", choices=c("Not important", "True", "False")),
-      selectInput("is_exterior", "Do you want it to be exterior?:", choices=c("Not important", "True", "False")),
-      selectInput("has_garden", "Do you want to have a garden?:", choices=c("Not important", "True", "False")),
-      selectInput("has_pool", "Do you want to have a pool?:", choices=c("Not important", "True", "False")),
-      selectInput("has_terrace", "Do you want to have a terrace?:", choices=c("Not important", "True", "False")),
-      selectInput("has_balcony", "Do you want to have a balcony?:", choices=c("Not important", "True", "False")),
-      selectInput("has_storage_room", "Do you want to have a storage room?:", choices=c("Not important", "True", "False")),
-      selectInput("is_accessible", "Do you want it to be accessible?:", choices=c("Not important", "True", "False")),
-      selectInput("has_green_zones", "Do you want to have a green zones?:", choices=c("Not important", "True", "False")),
-      selectInput("energy_certificate", "What energy certificate would you like it to have?:", choices=c("Not important", sort(unique(data$energy_certificate)))),
-      selectInput("orientation", "Any preference in orientation:", choices=c("Not important", "east", "west", "south", "north")),
+      selectInput("is_floor_under", "Is floor under?:", choices=c("True", "False")),
+      selectInput("is_renewal_needed", "Is renewal needed?:", choices=c("True", "False")),
+      numericInput("built_year", "Year the house was built in:", value = 2022, min =1800),
+      selectInput("has_central_heating", "Has central heating?:", choices=c("True", "False")),
+      selectInput("has_individual_heating", "Has individual heating?:", choices=c("True", "False")),
+      selectInput("has_ac", "Do you want to have AC?:", choices=c("True", "False")),
+      selectInput("has_fitted_wardrobes", "Do you want to have fitted wardrobes?:", choices=c( "True", "False")),
+      selectInput("has_lift", "Do you want to have a lift?:", choices=c("True", "False")),
+      selectInput("is_exterior", "Do you want it to be exterior?:", choices=c("True", "False")),
+      selectInput("has_garden", "Do you want to have a garden?:", choices=c( "True", "False")),
+      selectInput("has_pool", "Do you want to have a pool?:", choices=c( "True", "False")),
+      selectInput("has_terrace", "Do you want to have a terrace?:", choices=c( "True", "False")),
+      selectInput("has_balcony", "Do you want to have a balcony?:", choices=c( "True", "False")),
+      selectInput("has_storage_room", "Do you want to have a storage room?:", choices=c( "True", "False")),
+      selectInput("is_accessible", "Do you want it to be accessible?:", choices=c( "True", "False")),
+      selectInput("has_green_zones", "Do you want to have a green zones?:", choices=c( "True", "False")),
+      selectInput("energy_certificate", "What energy certificate would you like it to have?:", choices= sort(unique(data$energy_certificate))),
+      selectInput("orientation", "Any preference in orientation:", choices=c("east", "west", "south", "north")),
       
-      selectInput("has_parking", "Do you want to have parking?:", choices=c("Not important", "True", "False")),
+      selectInput("has_parking", "Do you want to have parking?:", choices=c( "True", "False")),
       conditionalPanel(
-      condition = "input.has_parking == 'True'",
-      selectInput("is_parking_included_in_price", "Parking included in price:", choices = c("Not important", "True", "False"))),
-      
+        condition = "input.has_parking == 'True'",
+        selectInput("is_parking_included_in_price", "Parking included in price:", choices = c("True", "False"))),
       ),
-    mainPanel(
-      plotOutput("predicted price")
+      mainPanel(
+      h3("The predicted price is:"),
+      br(),
+      textOutput("predicted_price"))
     )
   )
-)
 
 
-server=function(input, output, session) {
+
+server = function(input, output, session) {
+  
+  
+  h2o.init()
+  model <- h2o.loadModel("final_model")
   
   get_neighborhoods=function(subtitle) {
     unique(data$neighborhood_id[data$subtitle == subtitle])
   }
- 
+  
   observe({
     subtitle = input$subtitle
     if (is.null(subtitle) || subtitle == "Select a district") {
@@ -855,101 +1138,164 @@ server=function(input, output, session) {
     } else {
       
       neighborhood_id = get_neighborhoods(subtitle)
-      updateSelectInput(session, "neighborhood_id", choices = c("Select a neighborhood", neighborhood_id))
+      updateSelectInput(session, "neighborhood_id", choices = c( neighborhood_id))
     }
   })
- 
-  predicted_price = reactive({
-        sq_mt_built = input$sq_mt_built
-        n_rooms = input$n_rooms
-        n_bathrooms = input$n_bathrooms
-        subtitle = input$subtitle
-        floor = input$floor
-        is_floor_under = input$is_floor_under
-        neighborhood_id = input$neighborhood_id
-        house_type_id = input$house_type_id
-        is_renewal_needed = input$is_renewal_needed
-        has_central_heating = input$has_central_heating
-        has_individual_heating = input$has_individual_heating
-        built_year = input$built_year
-        has_ac = input$has_ac
-        has_fitted_wardrobes = input$has_fitted_wardrobes
-        has_lift = input$has_lift
-        has_pool = input$has_pool
-        has_storage_room = input$has_storage_room
-        energy_certificate = input$energy_certificate
-        orientation = input$orientation
-        is_exterior = input$is_exterior
-        has_terrace = input$has_terrace
-        is_accessible = input$is_accessible
-        has_parking = input$has_parking
-        has_garden = input$has_garden
-        has_balcony = input$has_balcony
-        has_green_zones = input$has_green_zones
-        is_parking_included_in_price = input$is_parking_included_in_price
-
-    #Crear un dataframe con los valores introducidos por el usuario
-    user_data <- data.frame(subtitle = subtitle,
-                            sq_mt_built = sq_mt_built,
-                            n_rooms = n_rooms,
-                            n_bathrooms = n_bathrooms,
-                            floor = floor,
-                            is_floor_under = is_floor_under,
-                            neighborhood_id = neighborhood_id,
-                            buy_price = buy_price,
-                            buy_price_by_area = buy_price_by_area,
-                            house_type_id = house_type_id,
-                            is_renewal_needed = is_renewal_needed,
-                            built_year = built_year,
-                            has_central_heating = has_central_heating,
-                            has_individual_heating = has_individual_heating,
-                            has_ac = has_ac,
-                            has_fitted_wardrobes = has_fitted_wardrobes,
-                            has_lift = has_lift,
-                            is_exterior = is_exterior,
-                            has_garden = has_garden,
-                            has_pool = has_pool,
-                            has_terrace = has_terrace,
-                            has_balcony = has_balcony,
-                            has_storage_room = has_storage_room,
-                            is_accessible = is_accessible,
-                            has_green_zones = has_green_zones,
-                            energy_certificate = energy_certificate,
-                            has_parking = has_parking,
-                            is_parking_included_in_price = is_parking_included_in_price,
-                            orientation = orientation)
+  
+  user_data = reactive({
+    h2o.H2OFrame(sq_mt_built = input$sq_mt_built,
+               n_rooms = input$n_rooms,
+               n_bathrooms = input$n_bathrooms,
+               subtitle = input$subtitle,
+               floor = input$floor,
+               is_floor_under = input$is_floor_under,
+               neighborhood_id = input$neighborhood_id,
+               house_type_id = input$house_type_id,
+               is_renewal_needed = input$is_renewal_needed,
+               has_central_heating = input$has_central_heating,
+               has_individual_heating = input$has_individual_heating,
+               built_year = input$built_year,
+               has_ac = input$has_ac,
+               has_fitted_wardrobes = input$has_fitted_wardrobes,
+               has_lift = input$has_lift,
+               has_pool = input$has_pool,
+               has_storage_room = input$has_storage_room,
+               energy_certificate = input$energy_certificate,
+               orientation = input$orientation,
+               is_exterior = input$is_exterior,
+               has_terrace = input$has_terrace,
+               is_accessible = input$is_accessible,
+               has_parking = input$has_parking,
+               has_garden = input$has_garden,
+               has_balcony = input$has_balcony,
+               has_green_zones = input$has_green_zones,
+               is_parking_included_in_price = input$is_parking_included_in_price) })
     
-    predicted_price = predict(elasticnet_model, newdata = user_data)
-    return(predicted_price)
+
+    
+  #predicted_price = reactive({ predict(elasticnet, user_data())})
+  #predicted_price = reactive({ h2o.predict(final_model, user_data())})
+  
+  #output$predicted_price = renderText({predicted_price()})
+  
+   output$predicted_price <- renderText({
+    user_data_frame <- as.data.frame(user_data())
+    prediction <- as.numeric(h2o.predict(model, as.h2o(user_data_frame)))
+    paste0("$", formatC(prediction, digits = 0, format = "d", big.mark = ","))
   })
   
-  
-  output$predicted_results <- renderText({
-      if (!is.null(input$subtitle) && !is.null(input$neighborhood_id) && input$neighborhood_id != "Select a neighborhood" && !is.null(input$sq_mt_built) && !is.null(input$n_rooms) && !is.null(input$n_bathrooms) && !is.null(input$house_type_id)) {
-        predicted_price()
-    } else {
-        
-    }
-})
-  output$predicted_chart <- renderPlot({
-  plot_data <- predict_price_chart(predicted_price())
-  plot(plot_data)
-})
-  
-  #If the user is not really sure about what he wants ---> still need to design this part
-  output$predicted_output <- renderUI({
-  if (input$variable == "Not important") {
-    print("Select a variable to continue")
-  } else {
-    variable_name <- input$variable
-    predicted_output <- predict_price_output(variable_name)
-    div(predicted_output)
-  }
-})
-  output$all_predicted_results <- renderPrint({
-  tagList(output$predicted_results, output$predicted_chart, output$predicted_output)
-})
+  session$onSessionEnded(function() {
+    h2o.shutdown()
+  })
 }
 
 shinyApp(ui = ui, server = server)
+```
+
+```{r App code}
+
+library(shiny)
+ui <- fluidPage(
+  titlePanel("House price prediction"),
+  sidebarLayout(
+    sidebarPanel(
+      numericInput("sq_mt_built", "Introduce the square meters of the house you are looking for:", min =15, max = 999 , value = 100),
+      numericInput("n_rooms", "Introduce the number of rooms:", value = 3, min = 0, max = 24),
+      numericInput("n_bathrooms", "Introduce the number of bathrooms:", value = 2, min = 1, max = 14),
+      selectInput("subtitle", "Introduce the district you want to live in:", choices = sort(unique(data$subtitle))),
+      selectInput("neighborhood_id", "Introduce the neighborhood you want to live in:", choices = "Select a district first"),
+      selectInput("house_type_id", "What kind of house would you like to live in?:", choices = unique(data$house_type_id)),
+      conditionalPanel(
+        condition = "input.house_type_id != 'HouseType 2: Detached house'",
+        selectInput("floor", "Select floor number:", choices = c(sort(unique(data$floor))))),
+      
+      selectInput("is_floor_under", "Is floor under?:", choices=c("True", "False")),
+      selectInput("is_renewal_needed", "Is renewal needed?:", choices=c("True", "False")),
+      numericInput("built_year", "Year the house was built in:", value = 2022, min =1800),
+      selectInput("has_central_heating", "Has central heating?:", choices=c("True", "False")),
+      selectInput("has_individual_heating", "Has individual heating?:", choices=c("True", "False")),
+      selectInput("has_ac", "Do you want to have AC?:", choices=c("True", "False")),
+      selectInput("has_fitted_wardrobes", "Do you want to have fitted wardrobes?:", choices=c( "True", "False")),
+      selectInput("has_lift", "Do you want to have a lift?:", choices=c("True", "False")),
+      selectInput("is_exterior", "Do you want it to be exterior?:", choices=c("True", "False")),
+      selectInput("has_garden", "Do you want to have a garden?:", choices=c( "True", "False")),
+      selectInput("has_pool", "Do you want to have a pool?:", choices=c( "True", "False")),
+      selectInput("has_terrace", "Do you want to have a terrace?:", choices=c( "True", "False")),
+      selectInput("has_balcony", "Do you want to have a balcony?:", choices=c( "True", "False")),
+      selectInput("has_storage_room", "Do you want to have a storage room?:", choices=c( "True", "False")),
+      selectInput("is_accessible", "Do you want it to be accessible?:", choices=c( "True", "False")),
+      selectInput("has_green_zones", "Do you want to have a green zones?:", choices=c( "True", "False")),
+      selectInput("energy_certificate", "What energy certificate would you like it to have?:", choices= sort(unique(data$energy_certificate))),
+      selectInput("orientation", "Any preference in orientation:", choices=c("east", "west", "south", "north")),
+      
+      selectInput("has_parking", "Do you want to have parking?:", choices=c( "True", "False")),
+      conditionalPanel(
+        condition = "input.has_parking == 'True'",
+        selectInput("is_parking_included_in_price", "Parking included in price:", choices = c("True", "False"))),
+      ),
+      mainPanel(
+      h3("The predicted price is:"),
+      br(),
+      textOutput("predicted_price"))
+    )
+  )
+
+
+
+server = function(input, output, session) {
+  
+  get_neighborhoods=function(subtitle) {
+    unique(data$neighborhood_id[data$subtitle == subtitle])
+  }
+  
+  observe({
+    subtitle = input$subtitle
+    if (is.null(subtitle) || subtitle == "Select a district") {
+      
+      updateSelectInput(session, "neighborhood_id", choices = c("Select a district first"))
+    } else {
+      
+      neighborhood_id = get_neighborhoods(subtitle)
+      updateSelectInput(session, "neighborhood_id", choices = c( neighborhood_id))
+    }
+  })
+  
+  user_data = reactive({
+    data.frame(sq_mt_built = input$sq_mt_built,
+               n_rooms = input$n_rooms,
+               n_bathrooms = input$n_bathrooms,
+               subtitle = input$subtitle,
+               floor = input$floor,
+               is_floor_under = input$is_floor_under,
+               neighborhood_id = input$neighborhood_id,
+               house_type_id = input$house_type_id,
+               is_renewal_needed = input$is_renewal_needed,
+               has_central_heating = input$has_central_heating,
+               has_individual_heating = input$has_individual_heating,
+               built_year = input$built_year,
+               has_ac = input$has_ac,
+               has_fitted_wardrobes = input$has_fitted_wardrobes,
+               has_lift = input$has_lift,
+               has_pool = input$has_pool,
+               has_storage_room = input$has_storage_room,
+               energy_certificate = input$energy_certificate,
+               orientation = input$orientation,
+               is_exterior = input$is_exterior,
+               has_terrace = input$has_terrace,
+               is_accessible = input$is_accessible,
+               has_parking = input$has_parking,
+               has_garden = input$has_garden,
+               has_balcony = input$has_balcony,
+               has_green_zones = input$has_green_zones,
+               is_parking_included_in_price = input$is_parking_included_in_price) })
+    
+
+    
+  predicted_price = reactive({ predict(elasticnet, user_data())})
+  output$predicted_price = renderText({predicted_price()})
+}
+
+shinyApp(ui = ui, server = server)
+
+
 ```
