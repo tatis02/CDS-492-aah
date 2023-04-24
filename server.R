@@ -49,5 +49,5 @@ function(input, output, session) {
 
     
   predicted_price = reactive({ predict(elasticnet, user_data())})
-  output$predicted_price = renderText({predicted_price()})
+  output$predicted_price = renderText(paste(round(predicted_price(), 3), "€"))
 }
